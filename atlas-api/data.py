@@ -1,7 +1,7 @@
 """
-ATLAS API — Data Fetchers
-All external data sources: yfinance, CoinGecko, Finnhub, FRED, FMP, OpenInsider.
-Extracted from atlas_dashboard.py with caching added.
+ATLAS API — Data Fetchers v3
+All external data sources: yfinance, CoinGecko, Finnhub, FRED, FMP.
+Market overview uses Finnhub (works from datacenter).
 """
 import yfinance as yf
 import requests
@@ -14,11 +14,10 @@ from config import (FINNHUB_KEY, FRED_KEY, FMP_KEY, CORE_FOUR,
 from cache import cached
 
 
-# ─── Session Key (same as Streamlit version) ─────────────────
 def session_key():
-    et  = pytz.timezone("America/New_York")
+    et = pytz.timezone("America/New_York")
     now = datetime.now(et)
-    c   = now.replace(hour=16, minute=30, second=0, microsecond=0)
+    c = now.replace(hour=16, minute=30, second=0, microsecond=0)
     if now < c:
         c -= timedelta(days=1)
     while c.weekday() >= 5:
@@ -26,10 +25,8 @@ def session_key():
     return c.strftime("%Y-%m-%d")
 
 
-# ─── Price Data ───────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["chart"], key_func=lambda tk, period="2y": f"daily:{tk}:{period}")
 def get_daily(tk, period="2y"):
-    """Fetch daily OHLCV for a ticker."""
     try:
         df = yf.Ticker(tk).history(period=period, interval="1d")
         if df is None or len(df) < 50:
@@ -43,61 +40,43 @@ def get_daily(tk, period="2y"):
 
 @cached(ttl=CACHE_TTL["overview"], key_func=lambda tickers: f"prices:{','.join(sorted(tickers))}")
 def get_prices(tickers):
-    """Batch fetch latest prices and daily change for a list of tickers."""
     if not tickers:
         return {}
     out = {}
+    # FMP primary
     try:
-        raw = yf.download(" ".join(tickers), period="3d", interval="1d",
-                           auto_adjust=True, progress=False, threads=True)
-        if raw is not None and len(raw) >= 2:
-            if len(tickers) == 1:
-                tk = tickers[0]
-                try:
-                    c = raw["Close"].dropna()
-                    if len(c) >= 2:
-                        out[tk] = {
-                            "price": float(c.iloc[-1]),
-                            "change": round((float(c.iloc[-1]) - float(c.iloc[-2])) / float(c.iloc[-2]) * 100, 2)
-                        }
-                except Exception:
-                    pass
-            else:
-                for tk in tickers:
-                    try:
-                        key = ("Close", tk) if ("Close", tk) in raw.columns else None
-                        c = raw[key].dropna() if key else raw["Close"][tk].dropna()
-                        if len(c) >= 2:
-                            out[tk] = {
-                                "price": float(c.iloc[-1]),
-                                "change": round((float(c.iloc[-1]) - float(c.iloc[-2])) / float(c.iloc[-2]) * 100, 2)
-                            }
-                    except Exception:
-                        pass
+        syms = ",".join(tickers)
+        r = requests.get(
+            f"https://financialmodelingprep.com/stable/quote?symbol={syms}&apikey={FMP_KEY}",
+            timeout=8)
+        if r.status_code == 200:
+            for q in r.json():
+                sym = q.get("symbol", "")
+                if sym in tickers:
+                    out[sym] = {
+                        "price": q.get("price"),
+                        "change": round(q.get("changesPercentage", 0), 2)
+                    }
     except Exception:
         pass
-    # Fallback for missing tickers
+    # yfinance fallback
     for tk in [t for t in tickers if t not in out]:
         try:
             h = yf.Ticker(tk).history(period="3d", interval="1d")
             if h is not None and len(h) >= 2:
                 if isinstance(h.columns, pd.MultiIndex):
                     h.columns = h.columns.get_level_values(0)
-                out[tk] = {
-                    "price": float(h["Close"].iloc[-1]),
-                    "change": round((float(h["Close"].iloc[-1]) - float(h["Close"].iloc[-2])) / float(h["Close"].iloc[-2]) * 100, 2)
-                }
+                c1 = float(h["Close"].iloc[-1])
+                c2 = float(h["Close"].iloc[-2])
+                out[tk] = {"price": c1, "change": round((c1 - c2) / c2 * 100, 2)}
         except Exception:
             pass
     return out
 
 
-
-
-# ─── Company Name (FMP profile, cached 24h) ───────────────────
 @cached(ttl=86400, key_func=lambda tk: f"name:{tk}")
 def get_name(tk):
-    """Fetch company short name from FMP profile. Cached 24h."""
+    """Fetch company name from FMP. Cached 24h."""
     try:
         r = requests.get(
             f"https://financialmodelingprep.com/stable/profile"
@@ -109,32 +88,52 @@ def get_name(tk):
         pass
     return tk
 
-# ─── S&P 500 ─────────────────────────────────────────────────
+
 @cached(ttl=CACHE_TTL["gate"], key_func=lambda: "sp500")
 def get_sp500():
-    """Fetch S&P 500 close series (2 years)."""
     try:
         df = yf.Ticker("^GSPC").history(period="2y", interval="1d")
-        return df["Close"].dropna() if df is not None else None
+        if df is not None and len(df) > 50:
+            return df["Close"].dropna()
     except Exception:
-        return None
+        pass
+    try:
+        r = requests.get(
+            f"https://financialmodelingprep.com/stable/historical-price-full?symbol=%5EGSPC&apikey={FMP_KEY}",
+            timeout=8)
+        if r.status_code == 200:
+            data = r.json().get("historical", [])[:504]
+            if data:
+                df = pd.DataFrame(data)
+                df["date"] = pd.to_datetime(df["date"])
+                df = df.sort_values("date").set_index("date")
+                return df["close"].rename("Close")
+    except Exception:
+        pass
+    return None
 
 
-# ─── VIX ──────────────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["gate"], key_func=lambda: "vix")
 def get_vix():
-    """Fetch current VIX level."""
     try:
         df = yf.Ticker("^VIX").history(period="5d", interval="1d")
-        return round(float(df["Close"].iloc[-1]), 2) if df is not None and len(df) > 0 else None
+        if df is not None and len(df) > 0:
+            return round(float(df["Close"].iloc[-1]), 2)
     except Exception:
-        return None
+        pass
+    try:
+        r = requests.get(
+            f"https://financialmodelingprep.com/stable/quote?symbol=%5EVIX&apikey={FMP_KEY}",
+            timeout=5)
+        if r.status_code == 200 and r.json():
+            return round(r.json()[0].get("price", 0), 2)
+    except Exception:
+        pass
+    return None
 
 
-# ─── Fear & Greed ─────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["pulse"], key_func=lambda: "fg")
 def get_fear_greed():
-    """Fetch Fear & Greed index. CNN primary, Alternative.me fallback."""
     try:
         r = requests.get(
             "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
@@ -150,10 +149,8 @@ def get_fear_greed():
             return {"score": None, "label": None}
 
 
-# ─── Crypto (Core Four) ──────────────────────────────────────
 @cached(ttl=CACHE_TTL["overview"], key_func=lambda: "crypto")
 def get_crypto():
-    """Fetch Core Four crypto prices. CoinGecko primary, yfinance fallback."""
     try:
         ids = ",".join(CORE_FOUR.keys())
         r = requests.get(
@@ -183,20 +180,22 @@ def get_crypto():
     except Exception:
         pass
     try:
-        m = {"bitcoin": "BTC-USD", "ethereum": "ETH-USD",
-             "solana": "SOL-USD", "ripple": "XRP-USD"}
-        res = {}
-        for cid, ys in m.items():
-            h = yf.Ticker(ys).history(period="2d", interval="1d")
-            if h is not None and len(h) >= 2:
-                c, p = float(h["Close"].iloc[-1]), float(h["Close"].iloc[-2])
-                res[cid] = {"usd": c, "usd_24h_change": (c - p) / p * 100, "usd_market_cap": None}
-        return res
+        r = requests.get(
+            f"https://financialmodelingprep.com/stable/quote?symbol=BTCUSD,ETHUSD,SOLUSD,XRPUSD&apikey={FMP_KEY}",
+            timeout=8)
+        if r.status_code == 200:
+            m = {"BTCUSD": "bitcoin", "ETHUSD": "ethereum", "SOLUSD": "solana", "XRPUSD": "ripple"}
+            res = {}
+            for q in r.json():
+                cid = m.get(q["symbol"])
+                if cid:
+                    res[cid] = {"usd": q.get("price"), "usd_24h_change": q.get("changesPercentage"), "usd_market_cap": None}
+            return res
     except Exception:
-        return {}
+        pass
+    return {}
 
 
-# ─── BTC Dominance ────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["overview"], key_func=lambda: "btcdom")
 def get_btc_dominance():
     try:
@@ -206,7 +205,6 @@ def get_btc_dominance():
         return None
 
 
-# ─── Fed Rate ─────────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["pulse"], key_func=lambda: "fed")
 def get_fed_rate():
     try:
@@ -219,7 +217,6 @@ def get_fed_rate():
         return None
 
 
-# ─── 10Y Yield ────────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["pulse"], key_func=lambda: "10y")
 def get_10y_yield():
     try:
@@ -233,14 +230,12 @@ def get_10y_yield():
         return None
 
 
-# ─── Earnings Check ───────────────────────────────────────────
 @cached(ttl=CACHE_TTL["earnings"], key_func=lambda tk: f"earn:{tk}")
 def check_earnings(tk):
-    """Check if ticker has earnings within EVENT_DAYS days. Returns (is_clear, date)."""
     try:
-        t  = datetime.now().strftime("%Y-%m-%d")
+        t = datetime.now().strftime("%Y-%m-%d")
         t2 = (datetime.now() + timedelta(days=EVENT_DAYS)).strftime("%Y-%m-%d")
-        r  = requests.get(
+        r = requests.get(
             f"https://finnhub.io/api/v1/calendar/earnings?from={t}&to={t2}"
             f"&symbol={tk}&token={FINNHUB_KEY}",
             timeout=5)
@@ -250,13 +245,8 @@ def check_earnings(tk):
         return True, None
 
 
-# ─── Macro News ───────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["news"], key_func=lambda: "news")
 def get_macro_news():
-    """
-    Macro news from Finnhub (primary) + FMP (secondary).
-    Target: 15 items. Sentiment tagged BULL/BEAR/WARN/NEUTRAL.
-    """
     MUST_HAVE = [
         "federal reserve", "fed ", "fomc", "interest rate", "rate hike", "rate cut",
         "inflation", "cpi", "pce", "gdp", "jobs report", "payroll", "unemployment",
@@ -299,7 +289,6 @@ def get_macro_news():
     seen = set()
     news = []
 
-    # ── Source 1: Finnhub general news ───────────────────────
     try:
         r = requests.get(
             f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_KEY}",
@@ -312,15 +301,10 @@ def get_macro_news():
                 continue
             if any(kw in hl.lower() for kw in MUST_HAVE):
                 seen.add(hl)
-                news.append({
-                    "text": hl[:120],
-                    "sentiment": sentiment(hl),
-                    "source": item.get("source", ""),
-                })
+                news.append({"text": hl[:120], "sentiment": sentiment(hl), "source": item.get("source", "")})
     except Exception:
         pass
 
-    # ── Source 2: FMP market news (fill remaining slots) ─────
     if len(news) < 15:
         try:
             r = requests.get(
@@ -335,15 +319,10 @@ def get_macro_news():
                     continue
                 if any(kw in hl.lower() for kw in MUST_HAVE):
                     seen.add(hl)
-                    news.append({
-                        "text": hl[:120],
-                        "sentiment": sentiment(hl),
-                        "source": item.get("site") or item.get("publisher") or "",
-                    })
+                    news.append({"text": hl[:120], "sentiment": sentiment(hl), "source": item.get("site") or ""})
         except Exception:
             pass
 
-    # ── Source 3: Finnhub forex/merger news (last resort) ────
     if len(news) < 10:
         try:
             r = requests.get(
@@ -356,25 +335,19 @@ def get_macro_news():
                 if len(hl) < 15 or hl in seen:
                     continue
                 seen.add(hl)
-                news.append({
-                    "text": hl[:120],
-                    "sentiment": sentiment(hl),
-                    "source": item.get("source", ""),
-                })
+                news.append({"text": hl[:120], "sentiment": sentiment(hl), "source": item.get("source", "")})
         except Exception:
             pass
 
     return news
 
 
-# ─── Upcoming Earnings (this week) ────────────────────────────
 @cached(ttl=CACHE_TTL["earnings"], key_func=lambda: "earnings_week")
 def get_upcoming_earnings():
-    """Get earnings happening this week."""
     try:
-        t  = datetime.now().strftime("%Y-%m-%d")
+        t = datetime.now().strftime("%Y-%m-%d")
         t2 = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
-        r  = requests.get(
+        r = requests.get(
             f"https://finnhub.io/api/v1/calendar/earnings?from={t}&to={t2}"
             f"&token={FINNHUB_KEY}",
             timeout=5)
@@ -386,30 +359,49 @@ def get_upcoming_earnings():
         return []
 
 
-# ─── Market Overview (indexes + commodities) ──────────────────
 @cached(ttl=CACHE_TTL["overview"], key_func=lambda: "overview")
 def get_market_overview():
-    """Batch fetch index and commodity prices."""
-    symbols = {
-        "^GSPC": "S&P 500", "^IXIC": "NASDAQ", "^DJI": "DOW",
-        "^RUT": "RUSSELL", "^VIX": "VIX", "GLD": "GOLD", "SLV": "SILVER",
-    }
+    """Market overview using Finnhub ETF proxies (works from datacenter)."""
     result = {}
-    try:
-        tickers = list(symbols.keys())
-        raw = yf.download(" ".join(tickers), period="3d", interval="1d",
-                           auto_adjust=True, progress=False, threads=True)
-        for sym, label in symbols.items():
-            try:
-                key = ("Close", sym) if ("Close", sym) in raw.columns else None
-                c = raw[key].dropna() if key else raw["Close"][sym].dropna()
-                if len(c) >= 2:
-                    price = float(c.iloc[-1])
-                    prev  = float(c.iloc[-2])
-                    chg   = round((price - prev) / prev * 100, 2)
+    etfs = {
+        "S&P 500": {"sym": "SPY", "mult": 10},
+        "NASDAQ":  {"sym": "QQQ", "mult": 37.2},
+        "DOW":     {"sym": "DIA", "mult": 100},
+        "RUSSELL": {"sym": "IWM", "mult": 10},
+        "GOLD":    {"sym": "GLD", "mult": 1},
+        "SILVER":  {"sym": "SLV", "mult": 1},
+    }
+    for label, info in etfs.items():
+        try:
+            r = requests.get(
+                f"https://finnhub.io/api/v1/quote?symbol={info['sym']}&token={FINNHUB_KEY}",
+                timeout=5)
+            if r.status_code == 200:
+                d = r.json()
+                c = d.get("c", 0)
+                pc = d.get("pc", 0)
+                if c and c > 0:
+                    price = round(c * info["mult"], 2) if info["mult"] != 1 else round(c, 2)
+                    chg = round((c - pc) / pc * 100, 2) if pc else 0
                     result[label] = {"price": price, "change": chg}
-            except Exception:
-                result[label] = {"price": None, "change": None}
-    except Exception:
-        pass
+        except Exception:
+            pass
+    # VIX
+    vix = get_vix()
+    if vix:
+        result["VIX"] = {"price": vix, "change": 0}
+    # Crypto
+    for label, sym in {"BTC": "BINANCE:BTCUSDT", "ETH": "BINANCE:ETHUSDT"}.items():
+        try:
+            r = requests.get(
+                f"https://finnhub.io/api/v1/quote?symbol={sym}&token={FINNHUB_KEY}",
+                timeout=5)
+            if r.status_code == 200:
+                d = r.json()
+                c = d.get("c", 0)
+                pc = d.get("pc", 0)
+                if c and c > 0:
+                    result[label] = {"price": round(c, 2), "change": round((c - pc) / pc * 100, 2) if pc else 0}
+        except Exception:
+            pass
     return result
