@@ -31,11 +31,22 @@ def session_key():
 def get_daily(tk, period="2y"):
     """Fetch daily OHLCV for a ticker."""
     try:
-        df = yf.Ticker(tk).history(period=period, interval="1d")
+        ticker_obj = yf.Ticker(tk)
+        df = ticker_obj.history(period=period, interval="1d")
         if df is None or len(df) < 50:
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+        # Cache company name while we have the Ticker object open — no extra call
+        try:
+            from cache import cache as _cache
+            name_key = f"name:{tk}"
+            if not _cache.get(name_key):
+                info = ticker_obj.info
+                name = info.get("shortName") or info.get("longName") or tk
+                _cache.set(name_key, name, ttl=86400)
+        except Exception:
+            pass
         return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
     except Exception:
         return None
