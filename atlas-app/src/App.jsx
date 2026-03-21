@@ -243,7 +243,7 @@ export default function App(){
                           <span style={{fontFamily:M,fontSize:10,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>#{hero.rank||1}</span>
                           <div style={{display:"flex",flexDirection:"column",gap:1}}>
                             <span style={{fontSize:18,fontWeight:700,lineHeight:1.1}}>{hero.ticker}</span>
-                            {hero.name&&<span style={{fontFamily:S,fontSize:10,color:C.ts,fontWeight:400,letterSpacing:.2}}>{hero.name}</span>}
+                            {hero.name&&<span style={{fontFamily:S,fontSize:10,color:C.ts,fontWeight:400}}>{hero.name}</span>}
                           </div>
                           <Pill sig={hero.signal}/>
                           {hero.clear&&<span style={{fontFamily:M,fontSize:9,color:C.grn,background:C.grnD,padding:"2px 7px",borderRadius:3}}>✓ No Earnings</span>}
