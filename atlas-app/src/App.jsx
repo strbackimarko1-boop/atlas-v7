@@ -15,6 +15,8 @@ const pf=v=>(v>=0?"+":"")+v.toFixed(2)+"%";
 const dc=(v,inv)=>inv?(v>0?C.red:C.grn):(v>=0?C.grn:C.red);
 const api=async p=>{try{const r=await fetch(p);return r.ok?await r.json():null}catch(e){return null}};
 
+
+
 // ── Gauge ────────────────────────────────────────────────
 function Gauge({value,max=100,size=76,label,color=C.mint,thick=5}){
   const r=(size-thick)/2,ci=Math.PI*r,p=Math.min(value/max,1),o=ci-p*ci;
@@ -243,7 +245,7 @@ export default function App(){
                           <span style={{fontFamily:M,fontSize:10,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>#{hero.rank||1}</span>
                           <div style={{display:"flex",flexDirection:"column",gap:1}}>
                             <span style={{fontSize:18,fontWeight:700,lineHeight:1.1}}>{hero.ticker}</span>
-                            {hero.name&&<span style={{fontFamily:S,fontSize:10,color:C.ts,fontWeight:400}}>{hero.name}</span>}
+                            {hero.name&&hero.name!==hero.ticker&&<span style={{fontFamily:S,fontSize:10,color:C.ts,fontWeight:400,letterSpacing:.1}}>{hero.name}</span>}
                           </div>
                           <Pill sig={hero.signal}/>
                           {hero.clear&&<span style={{fontFamily:M,fontSize:9,color:C.grn,background:C.grnD,padding:"2px 7px",borderRadius:3}}>✓ No Earnings</span>}
