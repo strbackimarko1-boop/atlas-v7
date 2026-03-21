@@ -37,13 +37,15 @@ def analyze(tk):
             f"?symbol={tk}&apikey={FMP_KEY}", timeout=8)
         if r.status_code == 200 and r.json():
             p = r.json()[0]
+            # BUG 4 FIX: mktCap is the correct field name in FMP profile
+            mkt_cap = p.get("mktCap") or p.get("marketCap") or p.get("market_cap")
             result["profile"] = {
                 "name": p.get("companyName", tk),
                 "sector": p.get("sector", ""),
                 "industry": p.get("industry", ""),
                 "exchange": p.get("exchangeShortName", ""),
                 "description": (p.get("description", "") or "")[:300],
-                "market_cap": p.get("mktCap"),
+                "market_cap": mkt_cap,
                 "employees": p.get("fullTimeEmployees"),
                 "country": p.get("country", ""),
                 "website": p.get("website", ""),
@@ -55,7 +57,23 @@ def analyze(tk):
     if not result["profile"].get("name"):
         result["profile"]["name"] = tk
 
-    # ── Price & 52-Week Range (Finnhub + yfinance) ────────
+    # ── Price & 52-Week Range ─────────────────────────────
+    # BUG 1 FIX: Finnhub /quote h/l are DAILY high/low, not 52-week.
+    # Use yfinance info for real 52-week high/low first, Finnhub for live price.
+    h52, l52 = None, None
+
+    # Get real 52-week range from yfinance
+    try:
+        yf_info = yf.Ticker(tk).info
+        h52 = yf_info.get("fiftyTwoWeekHigh")
+        l52 = yf_info.get("fiftyTwoWeekLow")
+        # Also grab market cap fallback
+        if not result["profile"].get("market_cap"):
+            result["profile"]["market_cap"] = yf_info.get("marketCap")
+    except Exception:
+        pass
+
+    # Live price from Finnhub
     try:
         r = requests.get(
             f"https://finnhub.io/api/v1/quote?symbol={tk}&token={FINNHUB_KEY}",
@@ -64,8 +82,6 @@ def analyze(tk):
             d = r.json()
             c = d.get("c", 0)
             pc = d.get("pc", 0)
-            h52 = d.get("h", 0)  # 52w high
-            l52 = d.get("l", 0)  # 52w low
             result["price"] = {
                 "current": round(c, 2) if c else None,
                 "prev_close": round(pc, 2) if pc else None,
@@ -74,21 +90,24 @@ def analyze(tk):
                 "high_52w": round(h52, 2) if h52 else None,
                 "low_52w": round(l52, 2) if l52 else None,
             }
-            # 52w range position
             if h52 and l52 and h52 != l52 and c:
                 result["price"]["range_pct"] = round((c - l52) / (h52 - l52) * 100, 1)
     except Exception:
         pass
 
-    # Fallback price from yfinance
+    # Fallback price from yfinance history
     if not result["price"].get("current"):
         try:
-            h = yf.Ticker(tk).history(period="5d")
-            if h is not None and len(h) >= 2:
-                c = float(h["Close"].iloc[-1])
-                pc = float(h["Close"].iloc[-2])
+            hist = yf.Ticker(tk).history(period="5d")
+            if hist is not None and len(hist) >= 2:
+                c = float(hist["Close"].iloc[-1])
+                pc = float(hist["Close"].iloc[-2])
                 result["price"]["current"] = round(c, 2)
                 result["price"]["change_pct"] = round((c - pc) / pc * 100, 2)
+                result["price"]["high_52w"] = round(h52, 2) if h52 else None
+                result["price"]["low_52w"] = round(l52, 2) if l52 else None
+                if h52 and l52 and h52 != l52:
+                    result["price"]["range_pct"] = round((c - l52) / (h52 - l52) * 100, 1)
         except Exception:
             pass
 
@@ -102,7 +121,6 @@ def analyze(tk):
             pe = km.get("peRatio")
             roe = km.get("returnOnEquity")
             de = km.get("debtToEquity")
-            pm = km.get("netIncomePerShare")
 
             result["financials"]["pe"] = round(pe, 1) if pe else None
             result["financials"]["roe"] = round(roe * 100, 1) if roe else None
@@ -130,7 +148,6 @@ def analyze(tk):
                 result["financials"]["eps_growth"] = round((eps_now - eps_prev) / abs(eps_prev) * 100, 1) if eps_prev else None
                 result["financials"]["profit_margin"] = round(margin, 1) if margin else None
 
-            # Score financials
             scores = []
             rg = result["financials"].get("revenue_growth")
             eg = result["financials"].get("eps_growth")
@@ -156,13 +173,14 @@ def analyze(tk):
     except Exception:
         pass
 
-    # ── Earnings History (FMP) ────────────────────────────
+    # ── Earnings History ──────────────────────────────────
+    # BUG 2 FIX: Try FMP first, fall back to Finnhub if empty
+    quarters = []
     try:
         r = requests.get(
             f"https://financialmodelingprep.com/stable/earnings-surprises"
             f"?symbol={tk}&limit=4&apikey={FMP_KEY}", timeout=8)
         if r.status_code == 200 and r.json():
-            quarters = []
             for e in r.json()[:4]:
                 actual = e.get("actualEarningResult")
                 estimated = e.get("estimatedEarning")
@@ -175,18 +193,42 @@ def analyze(tk):
                         "surprise": surprise,
                         "beat": actual > estimated,
                     })
-            result["earnings"]["history"] = quarters
-            result["earnings"]["beats"] = sum(1 for q in quarters if q.get("beat"))
-            result["earnings"]["total"] = len(quarters)
     except Exception:
         pass
 
+    # Finnhub fallback if FMP returned nothing
+    if not quarters:
+        try:
+            r = requests.get(
+                f"https://finnhub.io/api/v1/stock/earnings?symbol={tk}&limit=4&token={FINNHUB_KEY}",
+                timeout=5)
+            if r.status_code == 200 and r.json():
+                for e in r.json()[:4]:
+                    actual = e.get("actual")
+                    estimated = e.get("estimate")
+                    if actual is not None and estimated is not None and estimated != 0:
+                        surprise = round((actual - estimated) / abs(estimated) * 100, 1)
+                        quarters.append({
+                            "date": e.get("period", ""),
+                            "actual": round(actual, 2),
+                            "estimated": round(estimated, 2),
+                            "surprise": surprise,
+                            "beat": actual > estimated,
+                        })
+        except Exception:
+            pass
+
+    if quarters:
+        result["earnings"]["history"] = quarters
+        result["earnings"]["beats"] = sum(1 for q in quarters if q.get("beat"))
+        result["earnings"]["total"] = len(quarters)
+
     # Next earnings date
     try:
-        t = datetime.now().strftime("%Y-%m-%d")
+        t_now = datetime.now().strftime("%Y-%m-%d")
         t2 = (datetime.now() + timedelta(days=90)).strftime("%Y-%m-%d")
         r = requests.get(
-            f"https://finnhub.io/api/v1/calendar/earnings?from={t}&to={t2}"
+            f"https://finnhub.io/api/v1/calendar/earnings?from={t_now}&to={t2}"
             f"&symbol={tk}&token={FINNHUB_KEY}", timeout=5)
         cal = r.json().get("earningsCalendar", [])
         if cal:
@@ -226,7 +268,6 @@ def analyze(tk):
             result["analysts"]["target_low"] = pt.get("targetLow")
             result["analysts"]["target_median"] = pt.get("targetMedian")
             result["analysts"]["target_consensus"] = pt.get("targetConsensus")
-            # Upside/downside
             cur = result["price"].get("current")
             med = pt.get("targetMedian") or pt.get("targetConsensus")
             if cur and med:
@@ -242,10 +283,10 @@ def analyze(tk):
         if r.status_code == 200:
             buys, sells = 0, 0
             recent = []
-            for t in r.json():
-                ttype = (t.get("transactionType") or "").lower()
+            for trade in r.json():
+                ttype = (trade.get("transactionType") or "").lower()
                 try:
-                    td = datetime.strptime(t.get("transactionDate", "")[:10], "%Y-%m-%d")
+                    td = datetime.strptime(trade.get("transactionDate", "")[:10], "%Y-%m-%d")
                     if (datetime.now() - td).days > 90:
                         continue
                 except Exception:
@@ -258,10 +299,10 @@ def analyze(tk):
 
                 if len(recent) < 3:
                     recent.append({
-                        "name": (t.get("reportingName") or "")[:25],
+                        "name": (trade.get("reportingName") or "")[:25],
                         "type": "Buy" if ("purchase" in ttype or "buy" in ttype) else "Sell",
-                        "shares": t.get("securitiesTransacted", 0),
-                        "date": t.get("transactionDate", "")[:10],
+                        "shares": trade.get("securitiesTransacted", 0),
+                        "date": trade.get("transactionDate", "")[:10],
                     })
 
             result["insiders"] = {
@@ -274,7 +315,8 @@ def analyze(tk):
     except Exception:
         pass
 
-    # ── Valuation vs Sector (FMP) ─────────────────────────
+    # ── Valuation (FMP ratios) ────────────────────────────
+    # BUG 3 FIX: Fall back to financials.pe if ratios endpoint returns nothing
     try:
         r = requests.get(
             f"https://financialmodelingprep.com/stable/ratios"
@@ -284,8 +326,6 @@ def analyze(tk):
             current = ratios[0]
             pe_now = current.get("priceEarningsRatio")
             peg = current.get("priceEarningsToGrowthRatio")
-
-            # 5yr average PE
             pe_list = [x.get("priceEarningsRatio") for x in ratios if x.get("priceEarningsRatio")]
             pe_5y_avg = round(sum(pe_list) / len(pe_list), 1) if pe_list else None
 
@@ -299,6 +339,13 @@ def analyze(tk):
     except Exception:
         pass
 
+    # BUG 3 FIX continued: if valuation.pe is still None, use financials.pe as fallback
+    if not result["valuation"].get("pe") and result["financials"].get("pe"):
+        result["valuation"]["pe"] = result["financials"]["pe"]
+        # Can't calculate 5y avg without ratios history, but at least show current PE
+        if not result["valuation"].get("status"):
+            result["valuation"]["status"] = "FAIR VALUE"
+
     # ── Dividend ──────────────────────────────────────────
     try:
         r = requests.get(
@@ -307,10 +354,10 @@ def analyze(tk):
         if r.status_code == 200 and r.json():
             p = r.json()[0]
             div_yield = p.get("lastDiv", 0)
-            price = result["price"].get("current") or 1
+            cur_price = result["price"].get("current") or 1
             result["dividend"] = {
                 "annual": round(div_yield, 2) if div_yield else 0,
-                "yield": round(div_yield / price * 100, 2) if div_yield and price else 0,
+                "yield": round(div_yield / cur_price * 100, 2) if div_yield and cur_price else 0,
                 "pays": bool(div_yield and div_yield > 0),
             }
     except Exception:
@@ -333,49 +380,71 @@ def analyze(tk):
         pass
 
     # ── Overall Rating ────────────────────────────────────
-    # Combine fundamentals + analyst + technical
+    # BUG 5 FIX: Fundamentals-heavy weighting. Technical is max 15%.
+    # Revenue growth + analyst consensus + earnings beats dominate.
     points = 0
     max_pts = 0
 
-    # Analyst consensus
+    # Analyst consensus (weight: 3)
     if result["analysts"].get("consensus") == "BUY":
         points += 3
     elif result["analysts"].get("consensus") == "HOLD":
         points += 1
     max_pts += 3
 
-    # Analyst upside
-    up = result["analysts"].get("upside", 0)
-    if up and up > 15:
+    # Analyst upside (weight: 3)
+    up = result["analysts"].get("upside", 0) or 0
+    if up > 20:
+        points += 3
+    elif up > 10:
         points += 2
-    elif up and up > 5:
+    elif up > 0:
+        points += 1
+    max_pts += 3
+
+    # Revenue growth (weight: 3) — most important fundamental
+    rg = result["financials"].get("revenue_growth") or 0
+    if rg > 20:
+        points += 3
+    elif rg > 10:
+        points += 2
+    elif rg > 0:
+        points += 1
+    max_pts += 3
+
+    # EPS growth (weight: 2)
+    eg = result["financials"].get("eps_growth") or 0
+    if eg > 20:
+        points += 2
+    elif eg > 0:
         points += 1
     max_pts += 2
 
-    # Earnings beats
+    # Profit margin (weight: 2)
+    pm = result["financials"].get("profit_margin") or 0
+    if pm > 20:
+        points += 2
+    elif pm > 5:
+        points += 1
+    max_pts += 2
+
+    # Earnings beats (weight: 2)
     beats = result["earnings"].get("beats", 0)
     total_q = result["earnings"].get("total", 0)
     if total_q > 0:
-        if beats == total_q:
+        beat_rate = beats / total_q
+        if beat_rate == 1.0:
             points += 2
-        elif beats >= total_q * 0.75:
+        elif beat_rate >= 0.75:
             points += 1
     max_pts += 2
 
-    # Revenue growth
-    rg = result["financials"].get("revenue_growth")
-    if rg and rg > 10:
-        points += 2
-    elif rg and rg > 0:
-        points += 1
-    max_pts += 2
-
-    # Insider activity
+    # Insider activity (weight: 1)
     if result["insiders"].get("signal") in ["BULLISH", "POSITIVE"]:
         points += 1
     max_pts += 1
 
-    # Valuation
+    # Valuation (weight: 2)
     val_status = result["valuation"].get("status", "")
     if val_status == "UNDERVALUED":
         points += 2
@@ -383,19 +452,20 @@ def analyze(tk):
         points += 1
     max_pts += 2
 
-    # Technical
-    ts = result.get("atlas_score", {}).get("tech_score", 0)
+    # Technical score — capped at 15% of total weight (BUG 5 FIX)
+    # max_pts will be 20 at this point, so technical max = ~3 pts (15%)
+    ts = (result.get("atlas_score") or {}).get("tech_score", 0)
     if ts >= 75:
         points += 2
-    elif ts >= 55:
+    elif ts >= 50:
         points += 1
-    max_pts += 2
+    max_pts += 2  # technical is ~10% of total (2 out of ~22)
 
     confidence = round(points / max_pts * 100) if max_pts > 0 else 0
 
-    if confidence >= 70:
+    if confidence >= 65:
         overall = "BUY"
-    elif confidence >= 45:
+    elif confidence >= 40:
         overall = "HOLD"
     else:
         overall = "SELL"
@@ -408,20 +478,37 @@ def analyze(tk):
     }
 
     # ── Price Outlook ─────────────────────────────────────
+    # BUG 6 FIX: Cap growth rate for 5Y projection — nobody grows 65% for 5 years.
+    # Use min(revenue_growth, 20%) for 5Y compound, with further dampening.
     cur = result["price"].get("current") or 0
     target_med = result["analysts"].get("target_median") or result["analysts"].get("target_consensus")
     rg_val = result["financials"].get("revenue_growth") or 0
 
     if cur > 0:
-        # 1Y: analyst target or growth-based
+        # 1Y: analyst target is most reliable, else growth-based
         if target_med:
             outlook_1y = round(target_med, 2)
         else:
-            outlook_1y = round(cur * (1 + rg_val / 100), 2) if rg_val else round(cur * 1.08, 2)
+            # Use a conservative fraction of revenue growth for price
+            growth_1y = min(rg_val * 0.5, 30) if rg_val > 0 else 8
+            outlook_1y = round(cur * (1 + growth_1y / 100), 2)
 
-        # 5Y: compound growth estimate
-        growth = max(rg_val, 5) if rg_val else 8  # assume at least 5% if growing
-        outlook_5y = round(cur * (1 + growth / 100) ** 5, 2)
+        # BUG 6 FIX: 5Y growth capped at 20% per year max, dampened further
+        # High growers revert to mean — use sqrt dampening
+        raw_growth = rg_val if rg_val else 8
+        if raw_growth > 0:
+            # Cap at 20%, then dampen: high growers get less credit
+            capped = min(raw_growth, 20)
+            # Apply mean reversion: assume growth slows each year
+            # Year 1: capped, Year 2-5: capped * 0.8, 0.7, 0.6, 0.5
+            price_5y = cur
+            annual_rates = [capped, capped * 0.8, capped * 0.7, capped * 0.6, capped * 0.5]
+            for rate in annual_rates:
+                price_5y *= (1 + rate / 100)
+            outlook_5y = round(price_5y, 2)
+        else:
+            # Negative growth: conservative -5% per year
+            outlook_5y = round(cur * (1 + max(raw_growth, -5) / 100) ** 5, 2)
 
         result["outlook"] = {
             "price_1y": outlook_1y,
