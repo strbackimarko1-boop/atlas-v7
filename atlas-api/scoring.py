@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from config import (FINNHUB_KEY, VIX_MAX, RSI_LO, RSI_HI,
                     CHIP_MIN, CHIP_MAX, CACHE_TTL, get_chip)
 from cache import cached
-from data import get_daily, get_sp500, get_vix, check_earnings
+from data import get_daily, get_sp500, get_vix, check_earnings, get_name
 from indicators import calc_ind
 
 
@@ -41,15 +41,8 @@ def score(tk):
 
     clear, earn_dt = check_earnings(tk)
 
-    # ── Company name (from cache, populated by get_daily) ────
-    name = tk
-    try:
-        from cache import cache as _cache
-        cached_name = _cache.get(f"name:{tk}")
-        if cached_name:
-            name = cached_name
-    except Exception:
-        pass
+    # ── Company name (FMP, cached 24h) ──────────────────────
+    name = get_name(tk)
 
     # ── TIER 1 — Survival (35%, must be 100%) ────────────────
     r7 = bool((not pd.isna(r6m) and r6m < 85) or (not pd.isna(r52) and r52 < 80))
