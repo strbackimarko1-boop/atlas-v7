@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 const C = {
@@ -59,18 +59,14 @@ function statusText(gate){
 function tierChecklist(tiers){
   if(!tiers)return[];
   const items=[];
-  // Safety
   if(tiers.survival===100)items.push({icon:"✓",text:"Safe to trade — not overbought, no earnings",color:C.grn});
   else items.push({icon:"✗",text:"Blocked — too close to highs or earnings soon",color:C.red});
-  // Market
   if(tiers.regime>=67)items.push({icon:"✓",text:"Market supports this trade",color:C.grn});
   else if(tiers.regime>=33)items.push({icon:"◐",text:"Market is mixed — partial support",color:C.warn});
   else items.push({icon:"✗",text:"Market is working against you",color:C.red});
-  // Entry
   if(tiers.timing>=67)items.push({icon:"✓",text:"Good entry point right now",color:C.grn});
   else if(tiers.timing>=33)items.push({icon:"◐",text:"Entry timing is OK, not ideal",color:C.warn});
   else items.push({icon:"○",text:"Wait for a better entry",color:C.ts});
-  // Edge
   if(tiers.edge>=50)items.push({icon:"✓",text:"Extra edge — outperforming or post-earnings drift",color:C.grn});
   else items.push({icon:"○",text:"No extra edge detected",color:C.tm});
   return items;
@@ -83,7 +79,72 @@ function newsTag(sentiment){
   return{label:"NEUTRAL",color:C.ts,bg:C.card};
 }
 
-// ═══════════════════════════════════════════════════════════
+// ── TradingView Widget ───────────────────────────────────
+function TVChart({ticker,theme="dark"}){
+  const ref=useRef(null);
+  const scriptRef=useRef(null);
+
+  useEffect(()=>{
+    if(!ref.current||!ticker)return;
+    // Clean up previous widget
+    ref.current.innerHTML="";
+    if(scriptRef.current){scriptRef.current.remove();scriptRef.current=null;}
+
+    const containerId="tv_"+Math.random().toString(36).slice(2);
+    ref.current.id=containerId;
+
+    const script=document.createElement("script");
+    script.src="https://s3.tradingview.com/tv.js";
+    script.async=true;
+    script.onload=()=>{
+      if(window.TradingView&&ref.current){
+        new window.TradingView.widget({
+          autosize:true,
+          symbol:ticker,
+          interval:"D",
+          timezone:"America/New_York",
+          theme:"dark",
+          style:"1",
+          locale:"en",
+          toolbar_bg:"#0B0E13",
+          enable_publishing:false,
+          hide_top_toolbar:false,
+          hide_legend:false,
+          save_image:false,
+          backgroundColor:"#0B0E13",
+          gridColor:"rgba(30,37,48,0.8)",
+          container_id:containerId,
+          studies:["RSI@tv-basicstudies","MASimple@tv-basicstudies"],
+          studies_overrides:{
+            "moving average.length":50,
+          },
+          overrides:{
+            "paneProperties.background":"#0B0E13",
+            "paneProperties.backgroundType":"solid",
+            "scalesProperties.textColor":"#8892A4",
+            "mainSeriesProperties.candleStyle.upColor":"#4ADE80",
+            "mainSeriesProperties.candleStyle.downColor":"#FF6B81",
+            "mainSeriesProperties.candleStyle.borderUpColor":"#4ADE80",
+            "mainSeriesProperties.candleStyle.borderDownColor":"#FF6B81",
+            "mainSeriesProperties.candleStyle.wickUpColor":"#4ADE80",
+            "mainSeriesProperties.candleStyle.wickDownColor":"#FF6B81",
+          },
+        });
+      }
+    };
+    document.head.appendChild(script);
+    scriptRef.current=script;
+
+    return()=>{
+      if(scriptRef.current){scriptRef.current.remove();scriptRef.current=null;}
+    };
+  },[ticker]);
+
+  return(
+    <div ref={ref} style={{width:"100%",height:"100%"}}/>
+  );
+}
+
 export default function App(){
   const[page,setPage]=useState("radar");
   const[scan,setScan]=useState("STOCKS");
@@ -91,6 +152,7 @@ export default function App(){
   const[tab,setTab]=useState("plan");
   const[capital,setCapital]=useState(3500);
   const[chartTk,setChartTk]=useState("");
+  const[chartInput,setChartInput]=useState("");
   const[aTk,setATk]=useState("");
   const[aData,setAData]=useState(null);
   const[aLoading,setALoading]=useState(false);
@@ -505,16 +567,64 @@ export default function App(){
             </div>
           )}
 
+          {/* ═══ CHARTS PAGE — TradingView ═══ */}
           {page==="charts"&&(
-            <div style={{animation:"fadeIn .2s"}}>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                <input value={chartTk} onChange={e=>setChartTk(e.target.value.toUpperCase())} placeholder="Search ticker... NVDA, AAPL, BTC-USD" style={{flex:1,maxWidth:380,padding:"9px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+            <div style={{animation:"fadeIn .2s",display:"flex",flexDirection:"column",height:"calc(100vh - 112px)"}}>
+
+              {/* Search bar */}
+              <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                <input
+                  value={chartInput}
+                  onChange={e=>setChartInput(e.target.value.toUpperCase())}
+                  onKeyDown={e=>{if(e.key==="Enter"&&chartInput.trim())setChartTk(chartInput.trim())}}
+                  placeholder="Enter ticker — NVDA, AAPL, BTC, ETH..."
+                  style={{flex:1,maxWidth:380,padding:"9px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,fontWeight:600,letterSpacing:"0.04em",outline:"none"}}
+                  onFocus={e=>e.target.style.borderColor=C.mint}
+                  onBlur={e=>e.target.style.borderColor=C.b}
+                />
+                <button
+                  onClick={()=>{if(chartInput.trim())setChartTk(chartInput.trim())}}
+                  style={{padding:"9px 20px",borderRadius:6,border:"none",background:C.mint,color:"#000",fontFamily:M,fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:"0.04em"}}
+                >→ Load Chart</button>
+
+                {/* Quick picks */}
+                <div style={{display:"flex",gap:5,marginLeft:8}}>
+                  {["NVDA","AAPL","MSFT","BTC","ETH","SPY"].map(tk=>(
+                    <button key={tk} onClick={()=>{setChartInput(tk);setChartTk(tk);}} style={{
+                      padding:"5px 10px",borderRadius:5,border:`1px solid ${chartTk===tk?C.mint+"55":C.b}`,
+                      background:chartTk===tk?C.mintD:"transparent",
+                      color:chartTk===tk?C.mint:C.tm,
+                      fontFamily:M,fontSize:9,fontWeight:600,cursor:"pointer",letterSpacing:"0.06em",
+                    }}>{tk}</button>
+                  ))}
+                </div>
               </div>
-              <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"50px 30px",textAlign:"center"}}>
-                <div style={{fontSize:28,color:C.mint,opacity:.3,marginBottom:10}}>◻</div>
-                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Chart Station</div>
-                <div style={{fontSize:12,color:C.tm}}>Enter any ticker for chart + indicators + ATLAS score</div>
-              </div>
+
+              {/* Chart area */}
+              {!chartTk?(
+                <div style={{flex:1,background:C.card,border:`1px solid ${C.b}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
+                  <div style={{fontSize:36,color:C.mint,opacity:.15}}>◻</div>
+                  <div style={{fontSize:14,fontWeight:600,color:C.txt}}>Chart Station</div>
+                  <div style={{fontSize:12,color:C.tm}}>Enter a ticker above or pick a quick symbol to open TradingView</div>
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    {["NVDA","AAPL","BTC","ETH"].map(tk=>(
+                      <button key={tk} onClick={()=>{setChartInput(tk);setChartTk(tk);}} style={{
+                        padding:"8px 16px",borderRadius:6,border:`1px solid ${C.b}`,
+                        background:C.sf,color:C.ts,fontFamily:M,fontSize:11,fontWeight:600,cursor:"pointer",
+                      }}>{tk}</button>
+                    ))}
+                  </div>
+                </div>
+              ):(
+                <div style={{flex:1,background:C.card,border:`1px solid ${C.b}`,borderRadius:8,overflow:"hidden",position:"relative"}}>
+                  {/* Ticker label */}
+                  <div style={{position:"absolute",top:10,left:14,zIndex:10,display:"flex",alignItems:"center",gap:8,pointerEvents:"none"}}>
+                    <span style={{fontFamily:M,fontSize:11,fontWeight:700,color:C.mint,background:C.bg+"CC",padding:"2px 8px",borderRadius:4,backdropFilter:"blur(4px)"}}>{chartTk}</span>
+                    <span style={{fontFamily:M,fontSize:9,color:C.tm,background:C.bg+"CC",padding:"2px 6px",borderRadius:4,backdropFilter:"blur(4px)"}}>TradingView · Interactive</span>
+                  </div>
+                  <TVChart ticker={chartTk}/>
+                </div>
+              )}
             </div>
           )}
 
