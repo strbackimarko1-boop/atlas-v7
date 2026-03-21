@@ -83,338 +83,6 @@ function newsTag(sentiment){
   return{label:"NEUTRAL",color:C.ts,bg:C.card};
 }
 
-// ── AtlasStonks ──────────────────────────────────────────────
-function ScoreRing({score,C,M}){
-  const pct=Math.max(0,Math.min(100,score||0));
-  const r=40,ci=2*Math.PI*r,dash=(pct/100)*ci;
-  const color=pct>=70?C.mint:pct>=45?C.lav:C.red;
-  return(
-    <div style={{position:"relative",width:100,height:100,flexShrink:0}}>
-      <svg width={100} height={100} style={{transform:"rotate(-90deg)"}}>
-        <circle cx={50} cy={50} r={r} fill="none" stroke={C.b} strokeWidth={6}/>
-        <circle cx={50} cy={50} r={r} fill="none" stroke={color} strokeWidth={6}
-          strokeDasharray={`${dash} ${ci-dash}`} strokeLinecap="round"
-          style={{transition:"stroke-dasharray .8s"}}/>
-      </svg>
-      <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}}>
-        <span style={{fontFamily:M,fontSize:20,fontWeight:700,color}}>{Math.round(pct)}</span>
-        <span style={{fontSize:8,color:C.tm,letterSpacing:"0.1em"}}>SCORE</span>
-      </div>
-    </div>
-  );
-}
-
-function AtlasStonks({C,M,S,fmt,pf,dc,api}){
-  const[query,setQuery]=useState("");
-  const[ticker,setTicker]=useState(null);
-  const[loading,setLoading]=useState(false);
-  const[error,setError]=useState(null);
-  const[sd,setSd]=useState(null);
-  const[candles,setCandles]=useState(null);
-
-  const run=useCallback(async sym=>{
-    const t=sym.toUpperCase().trim();
-    setTicker(t);setLoading(true);setError(null);setSd(null);setCandles(null);
-    try{
-      const[score,chart]=await Promise.all([
-        api("/api/score/"+t),
-        api("/api/chart/"+t+"?period=6mo"),
-      ]);
-      if(!score)throw new Error("No data for "+t);
-      setSd(score);
-      setCandles(chart?.candles||chart?.data||null);
-    }catch(e){setError(e.message);}
-    finally{setLoading(false);}
-  },[]);
-
-  const submit=e=>{e.preventDefault();if(query.trim())run(query.trim());};
-
-  // Derived
-  const price=sd?.price;
-  const signal=sd?.signal;
-  const totalScore=sd?.total_score??sd?.score??0;
-  const tiers=sd?.tiers||{};
-  const catalyst=sd?.catalyst||{};
-  const tech=sd?.technicals||sd?.tech||{};
-  const fund=sd?.fundamentals||sd?.fund||{};
-
-  // Scenarios
-  const sf=totalScore/100;
-  const bullTgt=price?price*(1+0.10+sf*0.08):null;
-  const baseTgt=price?price*(1+0.04+sf*0.04):null;
-  const bearTgt=price?price*(1-0.07):null;
-  const bullPct=price&&bullTgt?((bullTgt-price)/price)*100:null;
-  const basePct=price&&baseTgt?((baseTgt-price)/price)*100:null;
-  const bearPct=price&&bearTgt?((bearTgt-price)/price)*100:null;
-  const bullProb=Math.round(25+sf*30);
-  const baseProb=Math.round(40-sf*5);
-  const bearProb=100-bullProb-baseProb;
-
-  // Verdict
-  const verdict=()=>{
-    if(!sd||!signal)return null;
-    const sig=signal.toUpperCase();
-    const sc=Math.round(totalScore);
-    const cat=catalyst.summary||"";
-    let v=`${ticker} scores ${sc}/100. `;
-    if(sig.includes("STRONG BUY"))v+=`High-conviction setup — regime, timing and edge all aligned. ${cat} Risk/reward favors a full position within ATLAS parameters.`;
-    else if(sig.includes("BUY"))v+=`Constructive setup. Conditions are favorable but not pristine. Standard sizing with disciplined stops. ${cat}`;
-    else if(sig.includes("FORMING"))v+=`Setup is still building — confirmation is pending. Watch, do not act yet. ${cat}`;
-    else v+=`Not trade-ready. Macro or technical filters are failing. Stand down and preserve capital until conditions improve.`;
-    return v;
-  };
-
-  const sigColor=sig=>{
-    if(!sig)return C.tm;
-    const s=sig.toUpperCase();
-    if(s.includes("STRONG BUY"))return C.mint;
-    if(s.includes("BUY"))return C.grn;
-    if(s.includes("FORMING"))return C.lav;
-    return C.red;
-  };
-
-  const Row=({label,val,color})=>(
-    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${C.bL}`}}>
-      <span style={{fontSize:11,color:C.ts}}>{label}</span>
-      <span style={{fontFamily:M,fontSize:12,fontWeight:600,color:color||C.txt}}>{val}</span>
-    </div>
-  );
-
-  const ScenBar=({label,tgt,pct,prob,color})=>(
-    <div style={{marginBottom:12}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-        <span style={{fontSize:11,fontWeight:600,color,letterSpacing:"0.06em"}}>{label}</span>
-        <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          <span style={{fontFamily:M,fontSize:12,color}}>{tgt!=null?fmt(tgt):"—"}</span>
-          <span style={{fontFamily:M,fontSize:10,color:C.ts}}>{pct!=null?(pct>=0?"+":"")+pct.toFixed(1)+"%":"—"}</span>
-          <span style={{fontFamily:M,fontSize:9,color,background:color+"18",border:`1px solid ${color}33`,borderRadius:3,padding:"1px 5px"}}>{prob}%</span>
-        </div>
-      </div>
-      <div style={{height:3,background:C.bL,borderRadius:2,overflow:"hidden"}}>
-        <div style={{width:`${prob}%`,height:"100%",background:color,borderRadius:2,transition:"width .6s"}}/>
-      </div>
-    </div>
-  );
-
-  // Mini SVG chart
-  const MiniChart=({data})=>{
-    if(!data||data.length<2)return null;
-    const W=800,H=160;
-    const prices=data.map(c=>c.close);
-    const mn=Math.min(...prices)*0.997,mx=Math.max(...prices)*1.003,rng=mx-mn||1;
-    const pad={t:8,b:20,l:2,r:2};
-    const iw=W-pad.l-pad.r,ih=H-pad.t-pad.b;
-    const tx=i=>pad.l+(i/(data.length-1))*iw;
-    const ty=v=>pad.t+ih-((v-mn)/rng)*ih;
-    const pts=data.map((c,i)=>`${tx(i)},${ty(c.close)}`).join(" ");
-    const area=`${pad.l},${pad.t+ih} ${pts} ${tx(data.length-1)},${pad.t+ih}`;
-    const ma20=data.map((_,i)=>{
-      if(i<19)return null;
-      const avg=data.slice(i-19,i+1).reduce((s,c)=>s+c.close,0)/20;
-      return`${tx(i)},${ty(avg)}`;
-    }).filter(Boolean).join(" ");
-    const step=Math.max(1,Math.floor(data.length/6));
-    const labels=data.filter((_,i)=>i%step===0);
-    return(
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{display:"block"}}>
-        <defs>
-          <linearGradient id="ascg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={C.mint} stopOpacity={.18}/>
-            <stop offset="100%" stopColor={C.mint} stopOpacity={0}/>
-          </linearGradient>
-        </defs>
-        <polygon points={area} fill="url(#ascg)"/>
-        <polyline points={pts} fill="none" stroke={C.mint} strokeWidth={1.6}/>
-        {ma20&&<polyline points={ma20} fill="none" stroke={C.lav} strokeWidth={1.1} strokeDasharray="5,4"/>}
-        {labels.map((c,ii)=>{
-          const i=data.indexOf(c);
-          return<text key={ii} x={tx(i)} y={H-4} fill={C.tm} fontSize={8} fontFamily={M} textAnchor="middle">{c.date?c.date.slice(5):""}</text>;
-        })}
-      </svg>
-    );
-  };
-
-  return(
-    <div style={{animation:"fadeIn .2s"}}>
-
-      {/* Header */}
-      <div style={{marginBottom:14}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:3}}>
-          <span style={{fontSize:16,fontWeight:700,letterSpacing:-.3}}>AtlasStonks</span>
-          <span style={{fontFamily:M,fontSize:9,color:C.mint,background:C.mintD,border:`1px solid ${C.mint}30`,borderRadius:3,padding:"2px 7px",letterSpacing:"0.12em"}}>DEEP TICKER ANALYSIS</span>
-        </div>
-        <div style={{fontFamily:M,fontSize:10,color:C.tm}}>Technical · Fundamental · Scenario · Verdict</div>
-      </div>
-
-      {/* Search */}
-      <form onSubmit={submit} style={{display:"flex",gap:8,marginBottom:16,maxWidth:440}}>
-        <input
-          value={query} onChange={e=>setQuery(e.target.value.toUpperCase())}
-          placeholder="AAPL, BTC, NVDA, ETH…" autoFocus
-          style={{flex:1,padding:"9px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,
-            color:C.txt,fontFamily:M,fontSize:13,fontWeight:600,letterSpacing:"0.05em",outline:"none",caretColor:C.mint}}
-          onFocus={e=>e.target.style.borderColor=C.mint}
-          onBlur={e=>e.target.style.borderColor=C.b}
-        />
-        <button type="submit" disabled={loading||!query.trim()} style={{
-          padding:"0 18px",borderRadius:6,border:"none",cursor:loading||!query.trim()?"not-allowed":"pointer",
-          background:loading||!query.trim()?C.b:C.mint,
-          color:loading||!query.trim()?C.tm:"#000",
-          fontFamily:S,fontSize:12,fontWeight:700,transition:"all .2s",whiteSpace:"nowrap",
-        }}>{loading?"Scanning…":"→ Analyze"}</button>
-      </form>
-
-      {/* Error */}
-      {error&&(
-        <div style={{background:C.redD,border:`1px solid ${C.red}33`,borderRadius:6,padding:"10px 14px",marginBottom:12,fontFamily:M,fontSize:11,color:C.red}}>⚠ {error}</div>
-      )}
-
-      {/* Empty */}
-      {!loading&&!sd&&!error&&(
-        <div style={{textAlign:"center",padding:"60px 0",color:C.tm}}>
-          <div style={{fontSize:28,opacity:.2,marginBottom:8}}>◎</div>
-          <div style={{fontFamily:M,fontSize:10,letterSpacing:"0.12em"}}>ENTER A TICKER TO BEGIN</div>
-        </div>
-      )}
-
-      {/* Loading */}
-      {loading&&(
-        <div style={{textAlign:"center",padding:"60px 0"}}>
-          <div style={{fontSize:24,color:C.mint,opacity:.4,marginBottom:8,animation:"pulse 1s infinite"}}>◈</div>
-          <div style={{fontFamily:M,fontSize:10,color:C.ts,letterSpacing:"0.1em"}}>SCANNING {ticker}…</div>
-        </div>
-      )}
-
-      {/* Results */}
-      {!loading&&sd&&(
-        <div style={{display:"flex",flexDirection:"column",gap:8}}>
-
-          {/* Hero strip */}
-          <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"12px 16px",display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
-            <ScoreRing score={totalScore} C={C} M={M}/>
-            <div style={{flex:1,minWidth:180}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
-                <span style={{fontFamily:M,fontSize:22,fontWeight:700}}>{ticker}</span>
-                {signal&&<span style={{fontFamily:M,fontSize:9,fontWeight:600,letterSpacing:".8px",padding:"3px 9px",borderRadius:4,
-                  background:sigColor(signal)+(signal?.toUpperCase().includes("STRONG")?"":"18"),
-                  color:signal?.toUpperCase().includes("STRONG BUY")?"#000":sigColor(signal),
-                  border:`1px solid ${sigColor(signal)}44`}}>{signal.toUpperCase()}</span>}
-              </div>
-              <div style={{display:"flex",gap:20,flexWrap:"wrap"}}>
-                {price!=null&&<div><div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:2}}>PRICE</div><div style={{fontFamily:M,fontSize:18,fontWeight:700,color:C.mint}}>{fmt(price)}</div></div>}
-                {sd.change!=null&&<div><div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:2}}>24H</div><div style={{fontFamily:M,fontSize:18,fontWeight:700,color:dc(sd.change)}}>{pf(sd.change)}</div></div>}
-                {sd.volume!=null&&<div><div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:2}}>VOLUME</div><div style={{fontFamily:M,fontSize:14,fontWeight:600}}>{Number(sd.volume).toLocaleString()}</div></div>}
-              </div>
-            </div>
-            {/* Tier badges */}
-            {Object.keys(tiers).length>0&&(
-              <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                {Object.entries(tiers).map(([tier,val])=>{
-                  const passed=val?.passed??val;
-                  return(
-                    <div key={tier} style={{display:"flex",alignItems:"center",gap:6}}>
-                      <span style={{color:passed?C.grn:C.red,fontSize:11,fontWeight:700,width:14}}>{passed?"✓":"✗"}</span>
-                      <span style={{fontSize:11,color:C.ts}}>{tier}</span>
-                      {val?.score!=null&&<span style={{fontFamily:M,fontSize:10,color:C.tm}}>{Math.round(val.score)}</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* 6mo Chart */}
-          {candles&&candles.length>0&&(
-            <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <span style={{fontFamily:M,fontSize:9,color:C.ts,letterSpacing:"0.12em"}}>6-MONTH PRICE ACTION</span>
-                <div style={{display:"flex",gap:12,fontFamily:M,fontSize:8,color:C.tm}}>
-                  <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:16,height:2,background:C.mint}}/>PRICE</span>
-                  <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{display:"inline-block",width:16,height:0,borderTop:`2px dashed ${C.lav}`}}/>MA20</span>
-                </div>
-              </div>
-              <MiniChart data={candles}/>
-            </div>
-          )}
-
-          {/* 2-col: Technical + Fundamental */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-            <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontFamily:M,fontSize:9,color:C.mint,letterSpacing:"0.12em",marginBottom:8}}>▸ TECHNICAL STRUCTURE</div>
-              {price!=null&&<Row label="Current Price" val={fmt(price)} color={C.mint}/>}
-              {(tech.ma20??sd.ma20)!=null&&<Row label="MA 20" val={fmt(tech.ma20??sd.ma20)} color={price>(tech.ma20??sd.ma20)?C.grn:C.red}/>}
-              {(tech.ma50??sd.ma50)!=null&&<Row label="MA 50" val={fmt(tech.ma50??sd.ma50)} color={price>(tech.ma50??sd.ma50)?C.grn:C.red}/>}
-              {(tech.ma200??sd.ma200)!=null&&<Row label="MA 200" val={fmt(tech.ma200??sd.ma200)} color={price>(tech.ma200??sd.ma200)?C.grn:C.red}/>}
-              {(tech.rsi??sd.indicators?.rsi)!=null&&<Row label="RSI (14)" val={(tech.rsi??sd.indicators?.rsi)?.toFixed(1)} color={(tech.rsi??sd.indicators?.rsi)>70?C.red:(tech.rsi??sd.indicators?.rsi)<30?C.grn:C.lav}/>}
-              {(tech.atr??sd.atr)!=null&&<Row label="ATR" val={fmt(tech.atr??sd.atr)}/>}
-              {(tech.volume_ratio??sd.volume_ratio)!=null&&<Row label="Vol / Avg" val={`${(tech.volume_ratio??sd.volume_ratio).toFixed(2)}×`} color={(tech.volume_ratio??sd.volume_ratio)>1.5?C.mint:C.txt}/>}
-              {(tech.support??sd.support)!=null&&<Row label="Support" val={fmt(tech.support??sd.support)} color={C.grn}/>}
-              {(tech.resistance??sd.resistance)!=null&&<Row label="Resistance" val={fmt(tech.resistance??sd.resistance)} color={C.red}/>}
-              {(tech.ma20??sd.ma20)&&(tech.ma50??sd.ma50)&&<Row label="Trend" val={(tech.ma20??sd.ma20)>(tech.ma50??sd.ma50)?"UPTREND":"DOWNTREND"} color={(tech.ma20??sd.ma20)>(tech.ma50??sd.ma50)?C.grn:C.red}/>}
-            </div>
-
-            <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
-              <div style={{fontFamily:M,fontSize:9,color:C.mint,letterSpacing:"0.12em",marginBottom:8}}>▸ FUNDAMENTAL SNAPSHOT</div>
-              {(fund.pe??sd.pe)!=null&&<Row label="P/E Ratio" val={(fund.pe??sd.pe)?.toFixed(1)}/>}
-              {(fund.fwd_pe??sd.fwd_pe)!=null&&<Row label="Fwd P/E" val={(fund.fwd_pe??sd.fwd_pe)?.toFixed(1)}/>}
-              {(fund.ps??sd.ps)!=null&&<Row label="P/S Ratio" val={(fund.ps??sd.ps)?.toFixed(1)}/>}
-              {(fund.analyst_target??sd.analyst_target)!=null&&<Row label="Analyst Target" val={fmt(fund.analyst_target??sd.analyst_target)} color={price&&(fund.analyst_target??sd.analyst_target)>price?C.grn:C.red}/>}
-              {(fund.upside??sd.upside)!=null&&<Row label="Analyst Upside" val={(fund.upside??sd.upside)>=0?"+"+( fund.upside??sd.upside).toFixed(1)+"%":(fund.upside??sd.upside).toFixed(1)+"%"} color={(fund.upside??sd.upside)>0?C.grn:C.red}/>}
-              {(fund.eps??sd.eps)!=null&&<Row label="EPS (TTM)" val={fmt(fund.eps??sd.eps)}/>}
-              {(fund.revenue_growth??sd.revenue_growth)!=null&&<Row label="Rev Growth" val={pf(fund.revenue_growth??sd.revenue_growth)} color={(fund.revenue_growth??sd.revenue_growth)>0?C.grn:C.red}/>}
-              {(catalyst.insider_buying??sd.insider_buying)!=null&&<Row label="Insider Buying" val={(catalyst.insider_buying??sd.insider_buying)?"YES":"NO"} color={(catalyst.insider_buying??sd.insider_buying)?C.mint:C.tm}/>}
-              {(catalyst.analyst_upgrade??sd.analyst_upgrade)!=null&&<Row label="Analyst Upgrade" val={(catalyst.analyst_upgrade??sd.analyst_upgrade)?"YES":"NO"} color={(catalyst.analyst_upgrade??sd.analyst_upgrade)?C.grn:C.tm}/>}
-              {(sd.indicators?.mfi??catalyst.mfi)!=null&&<Row label="MFI" val={(sd.indicators?.mfi??catalyst.mfi)?.toFixed(0)} color={(sd.indicators?.mfi??catalyst.mfi)>60?C.grn:C.ts}/>}
-            </div>
-          </div>
-
-          {/* Scenario Analysis */}
-          <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"12px 16px"}}>
-            <div style={{fontFamily:M,fontSize:9,color:C.mint,letterSpacing:"0.12em",marginBottom:12}}>▸ SCENARIO ANALYSIS — 4–8 WEEK HORIZON</div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:24}}>
-              <div>
-                <div style={{fontFamily:M,fontSize:9,color:C.grn,letterSpacing:"0.1em",marginBottom:8}}>BULL CASE</div>
-                <ScenBar label="Price Target" tgt={bullTgt} pct={bullPct} prob={bullProb} color={C.grn}/>
-                <div style={{fontSize:11,color:C.ts,lineHeight:1.7}}>Momentum continues, volume confirms. Catalyst event (upgrade, earnings beat, macro tailwind) accelerates the move.</div>
-              </div>
-              <div>
-                <div style={{fontFamily:M,fontSize:9,color:C.lav,letterSpacing:"0.1em",marginBottom:8}}>BASE CASE</div>
-                <ScenBar label="Price Target" tgt={baseTgt} pct={basePct} prob={baseProb} color={C.lav}/>
-                <div style={{fontSize:11,color:C.ts,lineHeight:1.7}}>Gradual grind with normal pullbacks. Market stays constructive. Technical trend holds without a major catalyst.</div>
-              </div>
-              <div>
-                <div style={{fontFamily:M,fontSize:9,color:C.red,letterSpacing:"0.1em",marginBottom:8}}>BEAR CASE</div>
-                <ScenBar label="Price Target" tgt={bearTgt} pct={bearPct} prob={bearProb} color={C.red}/>
-                <div style={{fontSize:11,color:C.ts,lineHeight:1.7}}>Macro deteriorates or support breaks. Gate closes. Score drops below 40. Risk-off rotation drags to key support zones.</div>
-              </div>
-            </div>
-          </div>
-
-          {/* ATLAS Verdict */}
-          <div style={{background:C.card,border:`1px solid ${C.mint}22`,borderRadius:8,padding:"12px 16px"}}>
-            <div style={{fontFamily:M,fontSize:9,color:C.mint,letterSpacing:"0.12em",marginBottom:10}}>▸ ATLAS VERDICT</div>
-            <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
-              <div style={{width:3,alignSelf:"stretch",background:`linear-gradient(to bottom,${C.mint},${C.lav})`,borderRadius:2,flexShrink:0}}/>
-              <p style={{fontSize:13,color:C.txt,lineHeight:1.85,margin:0}}>{verdict()}</p>
-            </div>
-            {signal&&(
-              <div style={{marginTop:10,display:"flex",gap:8,flexWrap:"wrap"}}>
-                <span style={{fontFamily:M,fontSize:9,fontWeight:600,padding:"2px 8px",borderRadius:3,
-                  background:sigColor(signal)+(signal?.toUpperCase().includes("STRONG")?"":"18"),
-                  color:signal?.toUpperCase().includes("STRONG BUY")?"#000":sigColor(signal),
-                  border:`1px solid ${sigColor(signal)}44`}}>{signal.toUpperCase()}</span>
-                <span style={{fontFamily:M,fontSize:9,fontWeight:600,padding:"2px 8px",borderRadius:3,background:C.mintD,color:C.lav,border:`1px solid ${C.lav}33`}}>SCORE {Math.round(totalScore)}/100</span>
-                {catalyst.catalyst_count!=null&&<span style={{fontFamily:M,fontSize:9,padding:"2px 8px",borderRadius:3,background:C.grnD,color:C.grn,border:`1px solid ${C.grn}33`}}>{catalyst.catalyst_count} CATALYSTS</span>}
-              </div>
-            )}
-          </div>
-
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════
 export default function App(){
   const[page,setPage]=useState("radar");
@@ -423,6 +91,9 @@ export default function App(){
   const[tab,setTab]=useState("plan");
   const[capital,setCapital]=useState(3500);
   const[chartTk,setChartTk]=useState("");
+  const[aTk,setATk]=useState("");
+  const[aData,setAData]=useState(null);
+  const[aLoading,setALoading]=useState(false);
   const[time,setTime]=useState(new Date());
   const[gate,setGate]=useState(null);
   const[pulse,setPulse]=useState(null);
@@ -444,6 +115,14 @@ export default function App(){
     const d=await api("/api/scan/"+m.toLowerCase());
     if(d)setScanData(d);
     setLoading(false);
+  },[]);
+
+  const doAnalyze=useCallback(async ticker=>{
+    if(!ticker)return;
+    setALoading(true);setAData(null);
+    const d=await api("/api/analyze/"+ticker.toUpperCase());
+    if(d)setAData(d);
+    setALoading(false);
   },[]);
 
   useEffect(()=>{load();doScan(scan);const i=setInterval(load,300000);return()=>clearInterval(i)},[]);
@@ -483,7 +162,7 @@ export default function App(){
         </div>
 
         <div style={{padding:"10px 8px 4px"}}>
-          {[{id:"radar",icon:"◆",l:"Radar"},{id:"charts",icon:"◻",l:"Charts"},{id:"outlook",icon:"◎",l:"AtlasStonks"},{id:"guide",icon:"⚡",l:"Guide"},{id:"settings",icon:"⚙",l:"Settings"}].map(n=>(
+          {[{id:"radar",icon:"◆",l:"Radar"},{id:"charts",icon:"◻",l:"Charts"},{id:"outlook",icon:"◎",l:"Outlook"},{id:"guide",icon:"⚡",l:"Guide"},{id:"settings",icon:"⚙",l:"Settings"}].map(n=>(
             <button key={n.id} onClick={()=>setPage(n.id)} style={{
               display:"flex",alignItems:"center",gap:10,width:"100%",marginBottom:2,
               padding:"9px 12px",borderRadius:6,border:"none",cursor:"pointer",
@@ -839,7 +518,192 @@ export default function App(){
             </div>
           )}
 
-          {page==="outlook"&&<AtlasStonks C={C} M={M} S={S} fmt={fmt} pf={pf} dc={dc} api={api}/>}
+          {page==="outlook"&&(
+            <div style={{animation:"fadeIn .2s"}}>
+              {/* Search */}
+              <div style={{display:"flex",gap:8,marginBottom:12}}>
+                <input value={aTk} onChange={e=>setATk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter")doAnalyze(aTk)}} placeholder="Type ticker — AAPL, NVDA, MSFT, BTC-USD..." style={{flex:1,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+                <button onClick={()=>doAnalyze(aTk)} style={{padding:"10px 20px",borderRadius:6,border:"none",background:C.mint,color:"#000",fontFamily:M,fontSize:11,fontWeight:700,cursor:"pointer"}}>→ Analyze</button>
+              </div>
+
+              {aLoading&&<div style={{textAlign:"center",padding:"40px",fontFamily:M,fontSize:12,color:C.ts}}>Analyzing {aTk}...</div>}
+
+              {!aLoading&&!aData&&<div style={{textAlign:"center",padding:"50px",background:C.card,borderRadius:8,border:`1px solid ${C.b}`}}>
+                <div style={{fontSize:24,color:C.lav,opacity:.3,marginBottom:8}}>◎</div>
+                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Deep Ticker Analysis</div>
+                <div style={{fontSize:12,color:C.tm}}>Enter any ticker for full research — financials, earnings, analyst ratings, insider activity, valuation, price outlook</div>
+              </div>}
+
+              {aData&&(()=>{
+                const d=aData;
+                const pr=d.profile||{};
+                const px=d.price||{};
+                const fin=d.financials||{};
+                const earn=d.earnings||{};
+                const an=d.analysts||{};
+                const ins=d.insiders||{};
+                const val=d.valuation||{};
+                const div=d.dividend||{};
+                const rt=d.rating||{};
+                const ol=d.outlook||{};
+                const at=d.atlas_score||{};
+                const sc=fin.scorecard||[];
+                const rtColor=rt.overall==="BUY"?C.grn:rt.overall==="SELL"?C.red:C.warn;
+                const fmtB=v=>{if(!v)return"—";if(v>=1e12)return"$"+(v/1e12).toFixed(1)+"T";if(v>=1e9)return"$"+(v/1e9).toFixed(1)+"B";if(v>=1e6)return"$"+(v/1e6).toFixed(0)+"M";return"$"+v.toLocaleString()};
+                const stColor=s=>s==="good"?C.grn:s==="warn"?C.warn:s==="bad"?C.red:C.ts;
+
+                return(<>
+                  {/* ═══ IDENTITY ROW ═══ */}
+                  <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                        <span style={{fontSize:20,fontWeight:700}}>{pr.name||d.ticker}</span>
+                        <span style={{fontFamily:M,fontSize:11,color:C.ts}}>{d.ticker}</span>
+                        <span style={{fontFamily:M,fontSize:9,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>{pr.exchange}</span>
+                        <span style={{fontFamily:M,fontSize:9,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>{pr.sector}</span>
+                      </div>
+                      <div style={{fontSize:11,color:C.ts,maxWidth:500}}>{pr.description}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontFamily:M,fontSize:24,fontWeight:700}}>{px.current?"$"+px.current.toLocaleString():"—"}</div>
+                      <div style={{fontFamily:M,fontSize:12,color:dc(px.change_pct||0)}}>{px.change_pct>0?"▲":"▼"} {Math.abs(px.change_pct||0).toFixed(2)}% ({px.change>0?"+":""}{(px.change||0).toFixed(2)})</div>
+                      <div style={{fontFamily:M,fontSize:10,color:C.tm,marginTop:4}}>Mkt Cap {fmtB(pr.market_cap)}</div>
+                    </div>
+                  </div>
+
+                  {/* ═══ 52-WEEK RANGE + RATING ═══ */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:10}}>
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 16px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:6}}>52-WEEK RANGE</div>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{fontFamily:M,fontSize:10,color:C.red}}>${px.low_52w||"—"}</span>
+                        <div style={{flex:1,height:6,background:C.bL,borderRadius:3,position:"relative"}}>
+                          <div style={{position:"absolute",left:`${px.range_pct||50}%`,top:-2,width:10,height:10,borderRadius:"50%",background:C.mint,border:`2px solid ${C.bg}`,transform:"translateX(-50%)"}}/>
+                          <div style={{height:6,width:`${px.range_pct||50}%`,background:`linear-gradient(90deg,${C.red}44,${C.grn}44)`,borderRadius:3}}/>
+                        </div>
+                        <span style={{fontFamily:M,fontSize:10,color:C.grn}}>${px.high_52w||"—"}</span>
+                      </div>
+                      <div style={{fontFamily:M,fontSize:9,color:C.ts,marginTop:4,textAlign:"center"}}>{px.range_pct||"—"}% from 52w low</div>
+                    </div>
+                    <div style={{background:rtColor+"15",border:`1px solid ${rtColor}33`,borderRadius:8,padding:"12px 24px",textAlign:"center",minWidth:140}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:4}}>OVERALL RATING</div>
+                      <div style={{fontFamily:M,fontSize:28,fontWeight:700,color:rtColor}}>{rt.overall||"—"}</div>
+                      <div style={{fontFamily:M,fontSize:10,color:C.ts}}>Confidence {rt.confidence||0}%</div>
+                    </div>
+                  </div>
+
+                  {/* ═══ MIDDLE: 3 COLUMNS ═══ */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+                    {/* Financials Scorecard */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>FINANCIALS</div>
+                      {sc.length>0?sc.map((s,i)=>(
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<sc.length-1?`1px solid ${C.bL}`:"none"}}>
+                          <span style={{fontSize:11,color:C.ts}}>{s.name}</span>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontFamily:M,fontSize:11,fontWeight:600,color:stColor(s.status)}}>{s.value}</span>
+                            <span style={{fontSize:10,color:stColor(s.status)}}>{s.status==="good"?"✓":s.status==="warn"?"◐":"✗"}</span>
+                          </div>
+                        </div>
+                      )):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No financial data</div>}
+                    </div>
+
+                    {/* Earnings */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>EARNINGS</div>
+                      {earn.next_date&&<div style={{fontFamily:M,fontSize:10,color:C.warn,marginBottom:6,padding:"3px 6px",background:C.warn+"12",borderRadius:3,display:"inline-block"}}>Next: {earn.next_date}</div>}
+                      <div style={{fontFamily:M,fontSize:11,color:C.ts,marginBottom:8}}>{earn.beats||0}/{earn.total||0} beats last {earn.total||0} quarters</div>
+                      {(earn.history||[]).map((q,i)=>(
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:i<(earn.history||[]).length-1?`1px solid ${C.bL}`:"none"}}>
+                          <span style={{fontFamily:M,fontSize:10,color:C.tm}}>{(q.date||"").slice(0,7)}</span>
+                          <span style={{fontFamily:M,fontSize:10}}>${q.actual}</span>
+                          <span style={{fontFamily:M,fontSize:10,color:C.tm}}>est ${q.estimated}</span>
+                          <span style={{fontFamily:M,fontSize:10,fontWeight:600,color:q.beat?C.grn:C.red}}>{q.beat?"BEAT":"MISS"} {q.surprise>0?"+":""}{q.surprise}%</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Analysts & Insiders */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>ANALYSTS & INSIDERS</div>
+                      {an.total>0&&<>
+                        <div style={{display:"flex",gap:4,marginBottom:6}}>
+                          <div style={{flex:an.buy,height:8,background:C.grn,borderRadius:"3px 0 0 3px"}}/>
+                          <div style={{flex:an.hold,height:8,background:C.warn}}/>
+                          <div style={{flex:an.sell,height:8,background:C.red,borderRadius:"0 3px 3px 0"}}/>
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:M,fontSize:10,marginBottom:4}}>
+                          <span style={{color:C.grn}}>{an.buy} Buy</span>
+                          <span style={{color:C.warn}}>{an.hold} Hold</span>
+                          <span style={{color:C.red}}>{an.sell} Sell</span>
+                        </div>
+                      </>}
+                      {an.target_median&&<div style={{fontFamily:M,fontSize:11,color:C.ts,padding:"4px 0",borderTop:`1px solid ${C.bL}`}}>
+                        Target <b style={{color:C.txt}}>${an.target_median}</b> {an.upside&&<span style={{color:an.upside>0?C.grn:C.red}}>({an.upside>0?"+":""}{an.upside}%)</span>}
+                      </div>}
+                      {an.target_high&&<div style={{fontFamily:M,fontSize:9,color:C.tm}}>Range ${an.target_low} — ${an.target_high}</div>}
+
+                      <div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.bL}`}}>
+                        <div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:4}}>INSIDER ACTIVITY (90D)</div>
+                        <div style={{display:"flex",gap:12,fontFamily:M,fontSize:11}}>
+                          <span style={{color:C.grn}}>{ins.buys_90d||0} Buys</span>
+                          <span style={{color:C.red}}>{ins.sells_90d||0} Sells</span>
+                          <span style={{color:ins.signal==="BULLISH"?C.grn:ins.signal==="NEGATIVE"?C.red:C.ts,fontWeight:600}}>{ins.signal||"—"}</span>
+                        </div>
+                        {(ins.recent||[]).slice(0,2).map((r,i)=>(
+                          <div key={i} style={{fontFamily:M,fontSize:9,color:C.tm,marginTop:2}}>{r.name} · {r.type} · {r.date}</div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ═══ BOTTOM: Valuation + Outlook ═══ */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    {/* Valuation & Dividend */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>VALUATION</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                        <div style={{textAlign:"center"}}><div style={{fontFamily:M,fontSize:9,color:C.tm}}>P/E Now</div><div style={{fontFamily:M,fontSize:15,fontWeight:700}}>{val.pe||"—"}</div></div>
+                        <div style={{textAlign:"center"}}><div style={{fontFamily:M,fontSize:9,color:C.tm}}>P/E 5Y Avg</div><div style={{fontFamily:M,fontSize:15,fontWeight:700}}>{val.pe_5y_avg||"—"}</div></div>
+                        <div style={{textAlign:"center"}}><div style={{fontFamily:M,fontSize:9,color:C.tm}}>PEG</div><div style={{fontFamily:M,fontSize:15,fontWeight:700}}>{val.peg||"—"}</div></div>
+                      </div>
+                      <div style={{textAlign:"center",padding:"4px 8px",borderRadius:4,background:val.status==="UNDERVALUED"?C.grnD:val.status==="OVERVALUED"?C.redD:C.bL,fontFamily:M,fontSize:10,fontWeight:600,color:val.status==="UNDERVALUED"?C.grn:val.status==="OVERVALUED"?C.red:C.ts,marginBottom:8}}>{val.status||"—"}</div>
+                      <div style={{borderTop:`1px solid ${C.bL}`,paddingTop:8}}>
+                        <div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:4}}>DIVIDEND</div>
+                        {div.pays?<div style={{fontFamily:M,fontSize:11}}>${div.annual}/yr · <span style={{color:C.mint}}>{div.yield}% yield</span></div>:<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No dividend</div>}
+                      </div>
+                    </div>
+
+                    {/* Price Outlook */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>PRICE OUTLOOK</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                        <div style={{background:C.sf,border:`1px solid ${C.bL}`,borderRadius:6,padding:"8px 10px",textAlign:"center"}}>
+                          <div style={{fontFamily:M,fontSize:9,color:C.tm}}>1 YEAR</div>
+                          <div style={{fontFamily:M,fontSize:18,fontWeight:700,color:ol.return_1y>0?C.grn:C.red}}>${ol.price_1y||"—"}</div>
+                          <div style={{fontFamily:M,fontSize:10,color:ol.return_1y>0?C.grn:C.red}}>{ol.return_1y>0?"+":""}{ol.return_1y||0}%</div>
+                        </div>
+                        <div style={{background:C.sf,border:`1px solid ${C.bL}`,borderRadius:6,padding:"8px 10px",textAlign:"center"}}>
+                          <div style={{fontFamily:M,fontSize:9,color:C.tm}}>5 YEAR</div>
+                          <div style={{fontFamily:M,fontSize:18,fontWeight:700,color:ol.return_5y>0?C.grn:C.red}}>${ol.price_5y||"—"}</div>
+                          <div style={{fontFamily:M,fontSize:10,color:ol.return_5y>0?C.grn:C.red}}>{ol.return_5y>0?"+":""}{ol.return_5y||0}%</div>
+                        </div>
+                      </div>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm}}>Based on {ol.basis||"available data"}</div>
+                      {at.signal&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.bL}`}}>
+                        <div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:4}}>ATLAS TECHNICAL</div>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <Pill sig={at.signal}/>
+                          <span style={{fontFamily:M,fontSize:11}}>Score {at.tech_score}/100</span>
+                        </div>
+                        <div style={{fontFamily:S,fontSize:10,color:C.ts,marginTop:4}}>{at.reason}</div>
+                      </div>}
+                    </div>
+                  </div>
+                </>);
+              })()}
+            </div>
+          )}
 
           {page==="guide"&&(
             <div style={{animation:"fadeIn .2s"}}>
