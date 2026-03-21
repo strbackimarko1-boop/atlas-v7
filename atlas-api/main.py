@@ -16,7 +16,7 @@ from cache import cache
 from data import (session_key, get_sp500, get_vix, get_fear_greed, get_crypto,
                   get_btc_dominance, get_fed_rate, get_10y_yield,
                   get_macro_news, get_upcoming_earnings, get_market_overview,
-                  get_prices, get_daily)
+                  get_prices, get_daily, get_name)
 from gate import macro_gate
 from scoring import score, upgrade_signal
 from catalyst import get_catalyst, compute_full_catalyst
@@ -150,9 +150,10 @@ def api_scan(mode: str):
     # Sort by tech score descending
     results.sort(key=lambda x: x["tech_score"], reverse=True)
 
-    # Add rank
+    # Add rank and company name
     for i, r in enumerate(results):
         r["rank"] = i + 1
+        r["name"] = get_name(r["ticker"])
 
     labels = {
         "stocks": "S&P 500 stocks",
