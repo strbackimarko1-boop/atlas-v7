@@ -137,7 +137,6 @@ def get_fear_greed():
 @cached(ttl=CACHE_TTL["overview"], key_func=lambda: "crypto")
 def get_crypto():
     """Fetch Core Four crypto prices. CoinGecko primary, yfinance fallback."""
-    # Try CoinGecko simple/price
     try:
         ids = ",".join(CORE_FOUR.keys())
         r = requests.get(
@@ -150,7 +149,6 @@ def get_crypto():
                 return d
     except Exception:
         pass
-    # Fallback: CoinGecko markets
     try:
         r2 = requests.get(
             "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd"
@@ -167,7 +165,6 @@ def get_crypto():
             return res
     except Exception:
         pass
-    # Fallback: yfinance
     try:
         m = {"bitcoin": "BTC-USD", "ethereum": "ETH-USD",
              "solana": "SOL-USD", "ripple": "XRP-USD"}
@@ -239,23 +236,39 @@ def check_earnings(tk):
 # ─── Macro News ───────────────────────────────────────────────
 @cached(ttl=CACHE_TTL["news"], key_func=lambda: "news")
 def get_macro_news():
-    """Filtered macro news with sentiment scoring."""
+    """
+    Macro news from Finnhub (primary) + FMP (secondary).
+    Target: 15 items. Sentiment tagged BULL/BEAR/WARN/NEUTRAL.
+    """
     MUST_HAVE = [
         "federal reserve", "fed ", "fomc", "interest rate", "rate hike", "rate cut",
         "inflation", "cpi", "pce", "gdp", "jobs report", "payroll", "unemployment",
         "s&p 500", "nasdaq", "dow jones", "vix", "market rally", "market selloff",
+        "market crash", "market drop", "stock market", "wall street",
         "recession", "earnings beat", "earnings miss", "guidance", "outlook",
         "oil price", "crude", "treasury yield", "10-year", "bond yield",
         "tariff", "trade war", "china trade", "bitcoin", "crypto market",
-        "nvidia", "fed chair", "powell", "debt ceiling", "bank failure",
+        "nvidia", "apple", "microsoft", "tesla", "amazon", "meta", "alphabet",
+        "fed chair", "powell", "yellen", "debt ceiling", "bank failure",
+        "ipo", "merger", "acquisition", "buyback", "dividend",
+        "sanctions", "geopolitical", "war", "election", "pentagon",
+        "sec", "doj", "antitrust", "regulation", "crypto regulation",
+        "etf", "hedge fund", "short squeeze", "options", "volatility",
     ]
-    BEAR = ["falls", "drops", "crashes", "declines", "warning", "recession", "concern",
-            "misses", "disappoints", "cut guidance", "fear", "sells off", "plunges",
-            "below expectations", "weaker", "slowdown", "contraction"]
-    BULL = ["rises", "gains", "rallies", "beats", "strong", "growth", "record high",
-            "surges", "above expectations", "raises guidance", "expansion",
-            "better than expected", "accelerates", "upgrade", "outperforms"]
-    WARN = ["uncertain", "mixed", "flat", "awaits", "pending", "volatile", "caution"]
+    BEAR = [
+        "falls", "drops", "crashes", "declines", "warning", "recession", "concern",
+        "misses", "disappoints", "cut guidance", "fear", "sells off", "plunges",
+        "below expectations", "weaker", "slowdown", "contraction", "layoffs",
+        "bankruptcy", "default", "crisis", "turmoil", "uncertainty", "risk",
+        "loses", "sinks", "tumbles", "slumps", "retreats", "cut",
+    ]
+    BULL = [
+        "rises", "gains", "rallies", "beats", "strong", "growth", "record high",
+        "surges", "above expectations", "raises guidance", "expansion",
+        "better than expected", "accelerates", "upgrade", "outperforms",
+        "jumps", "soars", "climbs", "boosts", "record", "breakthrough",
+    ]
+    WARN = ["uncertain", "mixed", "flat", "awaits", "pending", "volatile", "caution", "watch"]
 
     def sentiment(text):
         t = text.lower()
@@ -266,21 +279,74 @@ def get_macro_news():
         if any(w in t for w in WARN): return "warn"
         return "neutral"
 
+    seen = set()
     news = []
+
+    # ── Source 1: Finnhub general news ───────────────────────
     try:
         r = requests.get(
             f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_KEY}",
             timeout=5)
-        for item in r.json()[:40]:
-            hl = item.get("headline", "")
-            if len(hl) < 15:
+        for item in r.json()[:60]:
+            if len(news) >= 15:
+                break
+            hl = item.get("headline", "").strip()
+            if len(hl) < 15 or hl in seen:
                 continue
             if any(kw in hl.lower() for kw in MUST_HAVE):
-                news.append({"text": hl[:90], "sentiment": sentiment(hl)})
-            if len(news) >= 7:
-                break
+                seen.add(hl)
+                news.append({
+                    "text": hl[:120],
+                    "sentiment": sentiment(hl),
+                    "source": item.get("source", ""),
+                })
     except Exception:
         pass
+
+    # ── Source 2: FMP market news (fill remaining slots) ─────
+    if len(news) < 15:
+        try:
+            r = requests.get(
+                f"https://financialmodelingprep.com/stable/news/general-latest"
+                f"?limit=50&apikey={FMP_KEY}",
+                timeout=5)
+            for item in r.json():
+                if len(news) >= 15:
+                    break
+                hl = (item.get("title") or item.get("text") or "").strip()
+                if len(hl) < 15 or hl in seen:
+                    continue
+                if any(kw in hl.lower() for kw in MUST_HAVE):
+                    seen.add(hl)
+                    news.append({
+                        "text": hl[:120],
+                        "sentiment": sentiment(hl),
+                        "source": item.get("site") or item.get("publisher") or "",
+                    })
+        except Exception:
+            pass
+
+    # ── Source 3: Finnhub forex/merger news (last resort) ────
+    if len(news) < 10:
+        try:
+            r = requests.get(
+                f"https://finnhub.io/api/v1/news?category=merger&token={FINNHUB_KEY}",
+                timeout=5)
+            for item in r.json()[:20]:
+                if len(news) >= 15:
+                    break
+                hl = item.get("headline", "").strip()
+                if len(hl) < 15 or hl in seen:
+                    continue
+                seen.add(hl)
+                news.append({
+                    "text": hl[:120],
+                    "sentiment": sentiment(hl),
+                    "source": item.get("source", ""),
+                })
+        except Exception:
+            pass
+
     return news
 
 
