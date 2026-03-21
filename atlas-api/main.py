@@ -21,6 +21,7 @@ from gate import macro_gate
 from scoring import score, upgrade_signal
 from catalyst import get_catalyst, compute_full_catalyst
 from indicators import calc_ind
+from analyze import analyze as analyze_ticker
 
 
 # ─── App Setup ────────────────────────────────────────────────
@@ -283,6 +284,16 @@ def api_overview():
         "indexes": overview,
         "btc_dominance": get_btc_dominance(),
     }
+
+
+@app.get("/api/analyze/{ticker}")
+def api_analyze(ticker: str):
+    """Deep ticker analysis — fundamentals, earnings, analysts, insiders, valuation, rating."""
+    tk = ticker.upper()
+    data = analyze_ticker(tk)
+    if not data or not data.get("price", {}).get("current"):
+        raise HTTPException(status_code=404, detail=f"No data for {tk}")
+    return data
 
 
 @app.get("/api/cache/stats")
