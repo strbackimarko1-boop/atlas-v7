@@ -13,28 +13,11 @@ from config import (FINNHUB_KEY, VIX_MAX, RSI_LO, RSI_HI,
 from cache import cached
 from data import get_daily, get_sp500, get_vix, check_earnings
 from indicators import calc_ind
+import yfinance as yf
 
 
 @cached(ttl=CACHE_TTL["score"], key_func=lambda tk: f"score:{tk}")
 def score(tk):
-    """
-    Full ATLAS v7 scoring for a single ticker.
-
-    TECHNICAL ENGINE — 4 weighted tiers:
-      T1 Survival  35%  R7+R8      Must be 100% → else No Bueno
-      T2 Regime    25%  R1+R2+R3   Market + stock direction
-      T3 Timing    25%  R4+R5+R6   Entry precision
-      T4 Edge      15%  R9+R10     Bonus probability
-
-    CATALYST ENGINE — indicator-based scores:
-      MFI        0–15%
-      PED        0–10%
-      Rel.Str.   0–5%
-      (FMP/OpenInsider loaded separately via catalyst.py)
-
-    Returns dict with all scores, rules, levels, indicators.
-    Returns None if insufficient data.
-    """
     df = get_daily(tk)
     if df is None or len(df) < 60:
         return None
@@ -58,6 +41,14 @@ def score(tk):
     r52   = row.get("R52", np.nan)
 
     clear, earn_dt = check_earnings(tk)
+
+    # ── Fetch company name (yfinance info, fast + cached by yf internally) ──
+    name = tk
+    try:
+        info = yf.Ticker(tk).info
+        name = info.get("shortName") or info.get("longName") or tk
+    except Exception:
+        pass
 
     # ── TIER 1 — Survival (35%, must be 100%) ────────────────
     r7 = bool((not pd.isna(r6m) and r6m < 85) or (not pd.isna(r52) and r52 < 80))
@@ -126,7 +117,7 @@ def score(tk):
     if not t1_pass:
         signal, signal_cls = "SKIP", "skip"
     elif tech_score >= 75:
-        signal, signal_cls = "BUY", "buy"  # may upgrade to STRONG BUY with catalyst
+        signal, signal_cls = "BUY", "buy"
     elif tech_score >= 55:
         signal, signal_cls = "FORMING", "forming"
     else:
@@ -181,6 +172,7 @@ def score(tk):
 
     return {
         "ticker": tk,
+        "name": name,
         "signal": signal,
         "signal_cls": signal_cls,
         "tech_score": tech_score,
@@ -224,10 +216,6 @@ def score(tk):
 
 
 def upgrade_signal(score_data, catalyst_total):
-    """
-    Upgrade signal based on combined tech + catalyst score.
-    Called after catalyst.py loads FMP/OpenInsider data.
-    """
     tech = score_data["tech_score"]
     t1_pass = score_data["tiers"]["survival_pass"]
 
