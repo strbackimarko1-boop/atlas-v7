@@ -13,7 +13,6 @@ from config import (FINNHUB_KEY, VIX_MAX, RSI_LO, RSI_HI,
 from cache import cached
 from data import get_daily, get_sp500, get_vix, check_earnings
 from indicators import calc_ind
-import yfinance as yf
 
 
 @cached(ttl=CACHE_TTL["score"], key_func=lambda tk: f"score:{tk}")
@@ -42,11 +41,13 @@ def score(tk):
 
     clear, earn_dt = check_earnings(tk)
 
-    # ── Fetch company name (yfinance info, fast + cached by yf internally) ──
+    # ── Company name (from cache, populated by get_daily) ────
     name = tk
     try:
-        info = yf.Ticker(tk).info
-        name = info.get("shortName") or info.get("longName") or tk
+        from cache import cache as _cache
+        cached_name = _cache.get(f"name:{tk}")
+        if cached_name:
+            name = cached_name
     except Exception:
         pass
 
