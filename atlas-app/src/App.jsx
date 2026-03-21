@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 
 const C = {
@@ -14,8 +14,6 @@ const fmt=v=>v>=1000?"$"+v.toLocaleString("en-US",{maximumFractionDigits:0}):"$"
 const pf=v=>(v>=0?"+":"")+v.toFixed(2)+"%";
 const dc=(v,inv)=>inv?(v>0?C.red:C.grn):(v>=0?C.grn:C.red);
 const api=async p=>{try{const r=await fetch(p);return r.ok?await r.json():null}catch(e){return null}};
-
-
 
 // ── Gauge ────────────────────────────────────────────────
 function Gauge({value,max=100,size=76,label,color=C.mint,thick=5}){
@@ -85,6 +83,74 @@ function newsTag(sentiment){
   return{label:"NEUTRAL",color:C.ts,bg:C.card};
 }
 
+
+const THEMES={
+  atlas:{
+    bg:"#0B0E13",sf:"#10141C",card:"#151A24",b:"#1E2530",bH:"#2A3345",bL:"#171D2A",
+    mint:"#7DFFC3",mintD:"rgba(125,255,195,0.06)",grn:"#4ADE80",grnD:"rgba(74,222,128,0.06)",
+    red:"#FF6B81",redD:"rgba(255,107,129,0.06)",lav:"#B4A0FF",
+    txt:"#E8E8F0",ts:"#8892A4",tm:"#4A5568",warn:"#FBBF24",
+    sb:"#0A0D12",sbA:"#141B26",
+    name:"ATLAS Dark",
+  },
+  nft:{
+    bg:"#0A0A0A",sf:"#111111",card:"#181818",b:"#242424",bH:"#303030",bL:"#141414",
+    mint:"#D0FF00",mintD:"rgba(208,255,0,0.06)",grn:"#D0FF00",grnD:"rgba(208,255,0,0.06)",
+    red:"#FF4444",redD:"rgba(255,68,68,0.06)",lav:"#8116E0",
+    txt:"#FEFFFC",ts:"#888888",tm:"#555555",warn:"#FFB800",
+    sb:"#050505",sbA:"#181818",
+    name:"NFT Vibe",
+  },
+  chrome:{
+    bg:"#071526",sf:"#0D1E35",card:"#122440",b:"#1A3050",bH:"#223D63",bL:"#0D1E35",
+    mint:"#F28D52",mintD:"rgba(242,141,82,0.06)",grn:"#BDD9F2",grnD:"rgba(189,217,242,0.06)",
+    red:"#F28D52",redD:"rgba(242,141,82,0.06)",lav:"#5A6B8C",
+    txt:"#F2F2F2",ts:"#8A9BAC",tm:"#5A6B7C",warn:"#F2C94C",
+    sb:"#040E1A",sbA:"#0D1E35",
+    name:"Chrome Steel",
+  },
+};
+
+function TVChart({ticker,C}){
+  const ref=useRef(null);
+  const scriptRef=useRef(null);
+  useEffect(()=>{
+    if(!ref.current||!ticker)return;
+    ref.current.innerHTML="";
+    if(scriptRef.current){scriptRef.current.remove();scriptRef.current=null;}
+    const containerId="tv_"+Math.random().toString(36).slice(2);
+    ref.current.id=containerId;
+    const script=document.createElement("script");
+    script.src="https://s3.tradingview.com/tv.js";
+    script.async=true;
+    script.onload=()=>{
+      if(window.TradingView&&ref.current){
+        new window.TradingView.widget({
+          autosize:true,symbol:ticker,interval:"D",timezone:"America/New_York",
+          theme:"dark",style:"1",locale:"en",toolbar_bg:C.bg,
+          enable_publishing:false,hide_top_toolbar:false,hide_legend:false,save_image:false,
+          backgroundColor:C.bg,gridColor:"rgba(30,37,48,0.8)",container_id:containerId,
+          studies:["RSI@tv-basicstudies","MASimple@tv-basicstudies"],
+          overrides:{
+            "paneProperties.background":C.bg,"paneProperties.backgroundType":"solid",
+            "scalesProperties.textColor":C.ts,
+            "mainSeriesProperties.candleStyle.upColor":C.grn,
+            "mainSeriesProperties.candleStyle.downColor":C.red,
+            "mainSeriesProperties.candleStyle.borderUpColor":C.grn,
+            "mainSeriesProperties.candleStyle.borderDownColor":C.red,
+            "mainSeriesProperties.candleStyle.wickUpColor":C.grn,
+            "mainSeriesProperties.candleStyle.wickDownColor":C.red,
+          },
+        });
+      }
+    };
+    document.head.appendChild(script);
+    scriptRef.current=script;
+    return()=>{if(scriptRef.current){scriptRef.current.remove();scriptRef.current=null;}};
+  },[ticker]);
+  return<div ref={ref} style={{width:"100%",height:"100%"}}/>;
+}
+
 // ═══════════════════════════════════════════════════════════
 export default function App(){
   const[page,setPage]=useState("radar");
@@ -93,6 +159,8 @@ export default function App(){
   const[tab,setTab]=useState("plan");
   const[capital,setCapital]=useState(3500);
   const[chartTk,setChartTk]=useState("");
+  const[chartInput,setChartInput]=useState("");
+  const[theme,setTheme]=useState(()=>localStorage.getItem("atlasTheme")||"atlas");
   const[time,setTime]=useState(new Date());
   const[gate,setGate]=useState(null);
   const[pulse,setPulse]=useState(null);
@@ -119,6 +187,8 @@ export default function App(){
   useEffect(()=>{load();doScan(scan);const i=setInterval(load,300000);return()=>clearInterval(i)},[]);
   useEffect(()=>{doScan(scan)},[scan]);
 
+  const C=THEMES[theme]||THEMES.atlas;
+  const saveTheme=t=>{setTheme(t);try{localStorage.setItem("atlasTheme",t)}catch(e){}};
   const sigs=scanData?.results||[];
   const hero=sigs[sel]||null;
   const mkt=gate?.market||{};
@@ -243,10 +313,7 @@ export default function App(){
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
                         <div style={{display:"flex",alignItems:"center",gap:8}}>
                           <span style={{fontFamily:M,fontSize:10,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>#{hero.rank||1}</span>
-                          <div style={{display:"flex",flexDirection:"column",gap:1}}>
-                            <span style={{fontSize:18,fontWeight:700,lineHeight:1.1}}>{hero.ticker}</span>
-                            {hero.name&&hero.name!==hero.ticker&&<span style={{fontFamily:S,fontSize:10,color:C.ts,fontWeight:400,letterSpacing:.1}}>{hero.name}</span>}
-                          </div>
+                          <span style={{fontSize:18,fontWeight:700}}>{hero.ticker}</span>
                           <Pill sig={hero.signal}/>
                           {hero.clear&&<span style={{fontFamily:M,fontSize:9,color:C.grn,background:C.grnD,padding:"2px 7px",borderRadius:3}}>✓ No Earnings</span>}
                         </div>
@@ -500,15 +567,36 @@ export default function App(){
           )}
 
           {page==="charts"&&(
-            <div style={{animation:"fadeIn .2s"}}>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                <input value={chartTk} onChange={e=>setChartTk(e.target.value.toUpperCase())} placeholder="Search ticker... NVDA, AAPL, BTC-USD" style={{flex:1,maxWidth:380,padding:"9px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+            <div style={{animation:"fadeIn .2s",display:"flex",flexDirection:"column",height:"calc(100vh - 112px)"}}>
+              <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                <input value={chartInput} onChange={e=>setChartInput(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter"&&chartInput.trim())setChartTk(chartInput.trim())}} placeholder="Enter ticker — NVDA, AAPL, BTC, ETH..." style={{flex:1,maxWidth:380,padding:"9px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,fontWeight:600,letterSpacing:"0.04em",outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+                <button onClick={()=>{if(chartInput.trim())setChartTk(chartInput.trim())}} style={{padding:"9px 20px",borderRadius:6,border:"none",background:C.mint,color:"#000",fontFamily:M,fontSize:11,fontWeight:700,cursor:"pointer"}}>→ Load Chart</button>
+                <div style={{display:"flex",gap:5,marginLeft:8}}>
+                  {["NVDA","AAPL","MSFT","BTC","ETH","SPY"].map(tk=>(
+                    <button key={tk} onClick={()=>{setChartInput(tk);setChartTk(tk);}} style={{padding:"5px 10px",borderRadius:5,border:`1px solid ${chartTk===tk?C.mint+"55":C.b}`,background:chartTk===tk?C.mintD:"transparent",color:chartTk===tk?C.mint:C.tm,fontFamily:M,fontSize:9,fontWeight:600,cursor:"pointer"}}>{tk}</button>
+                  ))}
+                </div>
               </div>
-              <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"50px 30px",textAlign:"center"}}>
-                <div style={{fontSize:28,color:C.mint,opacity:.3,marginBottom:10}}>◻</div>
-                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Chart Station</div>
-                <div style={{fontSize:12,color:C.tm}}>Enter any ticker for chart + indicators + ATLAS score</div>
-              </div>
+              {!chartTk?(
+                <div style={{flex:1,background:C.card,border:`1px solid ${C.b}`,borderRadius:8,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:12}}>
+                  <div style={{fontSize:36,color:C.mint,opacity:.15}}>◻</div>
+                  <div style={{fontSize:14,fontWeight:600,color:C.txt}}>Chart Station</div>
+                  <div style={{fontSize:12,color:C.tm}}>Enter a ticker above or pick a quick symbol</div>
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    {["NVDA","AAPL","BTC","ETH"].map(tk=>(
+                      <button key={tk} onClick={()=>{setChartInput(tk);setChartTk(tk);}} style={{padding:"8px 16px",borderRadius:6,border:`1px solid ${C.b}`,background:C.sf,color:C.ts,fontFamily:M,fontSize:11,fontWeight:600,cursor:"pointer"}}>{tk}</button>
+                    ))}
+                  </div>
+                </div>
+              ):(
+                <div style={{flex:1,background:C.card,border:`1px solid ${C.b}`,borderRadius:8,overflow:"hidden",position:"relative"}}>
+                  <div style={{position:"absolute",top:10,left:14,zIndex:10,display:"flex",alignItems:"center",gap:8,pointerEvents:"none"}}>
+                    <span style={{fontFamily:M,fontSize:11,fontWeight:700,color:C.mint,background:C.bg+"CC",padding:"2px 8px",borderRadius:4}}>{chartTk}</span>
+                    <span style={{fontFamily:M,fontSize:9,color:C.tm,background:C.bg+"CC",padding:"2px 6px",borderRadius:4}}>TradingView · Interactive</span>
+                  </div>
+                  <TVChart ticker={chartTk} C={C}/>
+                </div>
+              )}
             </div>
           )}
 
@@ -541,11 +629,58 @@ export default function App(){
           )}
 
           {page==="settings"&&(
-            <div style={{animation:"fadeIn .2s",textAlign:"center",padding:"50px"}}>
-              <div style={{fontSize:28,color:C.ts,opacity:.3,marginBottom:10}}>⚙</div>
-              <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Settings</div>
-              <div style={{fontSize:12,color:C.tm}}>Themes, font sizes, API keys, preferences</div>
-              <div style={{fontFamily:M,fontSize:10,color:C.ts,marginTop:10}}>Coming next update</div>
+            <div style={{animation:"fadeIn .2s",maxWidth:700}}>
+              <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1.5,marginBottom:16}}>APPEARANCE · COLOR THEME</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:24}}>
+                {Object.entries(THEMES).map(([id,t])=>{
+                  const active=theme===id;
+                  return(
+                    <div key={id} onClick={()=>saveTheme(id)} style={{background:t.bg,border:`2px solid ${active?t.mint:t.b}`,borderRadius:10,overflow:"hidden",cursor:"pointer",transition:"border-color .2s"}}>
+                      {/* Mini preview header */}
+                      <div style={{background:t.sf,padding:"8px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${t.b}`}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <div style={{width:14,height:14,background:t.mint,borderRadius:3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,color:"#000",fontWeight:800}}>◈</div>
+                          <span style={{fontFamily:M,fontSize:9,fontWeight:700,color:t.txt}}>ATLAS</span>
+                        </div>
+                        {active&&<span style={{fontFamily:M,fontSize:7,color:t.mint,background:t.mintD,border:`1px solid ${t.mint}44`,borderRadius:2,padding:"1px 5px",letterSpacing:.5}}>ACTIVE</span>}
+                      </div>
+                      {/* Mini preview body */}
+                      <div style={{padding:"10px 12px"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                          <span style={{fontFamily:M,fontSize:13,fontWeight:700,color:t.txt}}>NVDA</span>
+                          <span style={{fontFamily:M,fontSize:7,padding:"2px 6px",borderRadius:3,background:t.mint,color:"#000",fontWeight:700}}>BUY</span>
+                        </div>
+                        <div style={{fontFamily:M,fontSize:11,color:t.mint,marginBottom:8}}>$872.50</div>
+                        {/* Mini sparkline */}
+                        <div style={{display:"flex",gap:2,alignItems:"flex-end",height:24,marginBottom:8}}>
+                          {[40,55,35,62,45,70,52,65,42,60].map((h,i)=>(
+                            <div key={i} style={{flex:1,height:`${h}%`,background:t.mint,borderRadius:"1px 1px 0 0",opacity:.7}}/>
+                          ))}
+                        </div>
+                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:M,fontSize:8}}>
+                          <span style={{color:t.ts}}>RSI <b style={{color:t.txt}}>68</b></span>
+                          <span style={{color:t.ts}}>Score <b style={{color:t.lav}}>76</b></span>
+                        </div>
+                      </div>
+                      {/* Theme name */}
+                      <div style={{padding:"6px 12px",borderTop:`1px solid ${t.b}`,background:t.sf}}>
+                        <div style={{fontFamily:M,fontSize:9,fontWeight:700,color:active?t.mint:t.ts,letterSpacing:.5}}>{t.name}</div>
+                      </div>
+                      {/* Color dots */}
+                      <div style={{display:"flex",gap:4,padding:"6px 12px",background:t.bg}}>
+                        {[t.mint,t.grn,t.red,t.lav,t.ts].map((c,i)=>(
+                          <div key={i} style={{width:8,height:8,borderRadius:"50%",background:c}}/>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"12px 16px"}}>
+                <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:4}}>CURRENT THEME</div>
+                <div style={{fontFamily:M,fontSize:13,fontWeight:700,color:C.mint}}>{THEMES[theme].name}</div>
+                <div style={{fontFamily:M,fontSize:10,color:C.ts,marginTop:4}}>Theme is saved in your browser and persists across sessions.</div>
+              </div>
             </div>
           )}
 
