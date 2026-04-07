@@ -108,6 +108,42 @@ function newsTag(sentiment,C){
 }
 
 // ═══════════════════════════════════════════════════════════════
+//  TradingView Embedded Chart Component
+// ═══════════════════════════════════════════════════════════════
+function TVChart({symbol,theme="dark",C}){
+  const containerId="tv_chart_"+symbol.replace(/[^a-zA-Z0-9]/g,"");
+  React.useEffect(()=>{
+    const el=document.getElementById(containerId);
+    if(!el)return;
+    el.innerHTML="";
+    const script=document.createElement("script");
+    script.src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.type="text/javascript";
+    script.async=true;
+    script.innerHTML=JSON.stringify({
+      autosize:true,
+      symbol:symbol,
+      interval:"D",
+      timezone:"America/New_York",
+      theme:theme,
+      style:"1",
+      locale:"en",
+      allow_symbol_change:true,
+      calendar:false,
+      support_host:"https://www.tradingview.com",
+      hide_top_toolbar:false,
+      hide_legend:false,
+      save_image:false,
+      studies:["STD;SMA"],
+      backgroundColor:theme==="dark"?"rgba(11,14,19,1)":"rgba(11,14,19,1)",
+      gridColor:"rgba(30,37,48,0.3)",
+    });
+    el.appendChild(script);
+  },[symbol,theme]);
+  return<div id={containerId} style={{width:"100%",height:"100%"}}/>;
+}
+
+// ═══════════════════════════════════════════════════════════════
 export default function App(){
   const[themeId,setThemeIdState]=useState(()=>{try{return window._atlasTheme||"dark"}catch(e){return"dark"}});
   const C=THEMES[themeId]||THEMES.dark;
@@ -121,9 +157,16 @@ export default function App(){
   const[tab,setTab]=useState("plan");
   const[capital,setCapital]=useState(3500);
   const[chartTk,setChartTk]=useState("");
+  const[chartSym,setChartSym]=useState("");
   const[aTk,setATk]=useState("");
   const[aData,setAData]=useState(null);
   const[aLoading,setALoading]=useState(false);
+  const[aShorts,setAShorts]=useState(null);
+  const[aRelated,setARelated]=useState(null);
+  const[aNews,setANews]=useState(null);
+  const[aAnalysts,setAAnalysts]=useState(null);
+  const[aFinancials,setAFinancials]=useState(null);
+  const[aDividends,setADividends]=useState(null);
   const[time,setTime]=useState(new Date());
   const[gate,setGate]=useState(null);
   const[pulse,setPulse]=useState(null);
@@ -149,9 +192,24 @@ export default function App(){
 
   const doAnalyze=useCallback(async ticker=>{
     if(!ticker)return;
-    setALoading(true);setAData(null);
-    const d=await api("/api/analyze/"+ticker.toUpperCase());
+    setALoading(true);setAData(null);setAShorts(null);setARelated(null);setANews(null);setAAnalysts(null);setAFinancials(null);setADividends(null);
+    const tk=ticker.toUpperCase();
+    const[d,sh,rel,nw,an,fin,dv]=await Promise.all([
+      api("/api/analyze/"+tk),
+      api("/api/shorts/"+tk),
+      api("/api/related/"+tk),
+      api("/api/ticker-news/"+tk),
+      api("/api/analysts/"+tk),
+      api("/api/financials/"+tk),
+      api("/api/dividends/"+tk),
+    ]);
     if(d)setAData(d);
+    if(sh)setAShorts(sh);
+    if(rel)setARelated(rel);
+    if(nw)setANews(nw);
+    if(an)setAAnalysts(an);
+    if(fin)setAFinancials(fin);
+    if(dv)setADividends(dv);
     setALoading(false);
   },[]);
 
@@ -261,8 +319,8 @@ export default function App(){
           {pulse?.btc_dominance&&<span style={{fontFamily:M,fontSize:11}}>BTC.D <b>{pulse.btc_dominance}%</b></span>}
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
             <div style={{display:"flex",alignItems:"center",gap:4}}>
-              <div style={{width:5,height:5,borderRadius:"50%",background:mkt.is_open?C.grn:C.tm,animation:mkt.is_open?"pulse 2s infinite":"none"}}/>
-              <span style={{fontFamily:M,fontSize:10,color:mkt.is_open?C.grn:C.tm}}>{mkt.is_open?"Open":"Closed"}</span>
+              <div style={{width:5,height:5,borderRadius:"50%",background:mkt.is_open?C.grn:mkt.after_hours?"#F59E0B":C.tm,animation:mkt.is_open?"pulse 2s infinite":"none"}}/>
+              <span style={{fontFamily:M,fontSize:10,color:mkt.is_open?C.grn:mkt.after_hours?"#F59E0B":C.tm}}>{mkt.is_open?"Open":mkt.after_hours?"After Hours":mkt.early_hours?"Pre-Market":"Closed"}</span>
             </div>
             <span style={{fontFamily:M,fontSize:10,color:C.ts}}>{et} · {etd}</span>
           </div>
@@ -517,20 +575,26 @@ export default function App(){
             </div>
           )}
 
-          {/* ═══ CHARTS ═══ */}
+          {/* ═══ CHARTS — TradingView Embedded ═══ */}
           {page==="charts"&&(
             <div style={{animation:"fadeIn .2s"}}>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                <input value={chartTk} onChange={e=>setChartTk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter"&&chartTk)window.open("https://www.tradingview.com/chart/?symbol="+chartTk,"_blank")}} placeholder="Enter ticker — NVDA, AAPL, BTC, ETH..." style={{flex:1,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
-                <button onClick={()=>{if(chartTk)window.open("https://www.tradingview.com/chart/?symbol="+chartTk,"_blank")}} style={btnAccent}>→ Load Chart</button>
-                {["NVDA","AAPL","BTC","ETH","SPY"].map(t=>(
-                  <button key={t} onClick={()=>{setChartTk(t);window.open("https://www.tradingview.com/chart/?symbol="+t,"_blank")}} style={{padding:"8px 14px",borderRadius:6,border:`1px solid ${C.b}`,background:C.card,color:C.ts,fontFamily:M,fontSize:10,cursor:"pointer"}}>{t}</button>
+              <div style={{display:"flex",gap:8,marginBottom:10}}>
+                <input value={chartTk} onChange={e=>setChartTk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter"&&chartTk)setChartSym(chartTk)}} placeholder="Enter ticker — NVDA, AAPL, BTCUSD, ETHUSD..." style={{flex:1,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+                <button onClick={()=>{if(chartTk)setChartSym(chartTk)}} style={btnAccent}>→ Load Chart</button>
+                {["NVDA","AAPL","TSLA","BTCUSD","SPY"].map(t=>(
+                  <button key={t} onClick={()=>{setChartTk(t);setChartSym(t)}} style={{padding:"8px 14px",borderRadius:6,border:`1px solid ${C.b}`,background:chartSym===t?C.mint+"18":C.card,color:chartSym===t?C.mint:C.ts,fontFamily:M,fontSize:10,cursor:"pointer"}}>{t}</button>
                 ))}
               </div>
-              <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"40px 30px",textAlign:"center"}}>
-                <div style={{fontSize:24,color:C.mint,opacity:.3,marginBottom:8}}>◻</div>
-                <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Chart Station</div>
-                <div style={{fontSize:12,color:C.tm}}>Enter any ticker above or click a quick symbol. Opens TradingView with full charting tools.</div>
+              <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,overflow:"hidden",height:"calc(100vh - 220px)",minHeight:450}}>
+                {chartSym?(
+                  <TVChart symbol={chartSym} theme={themeId==="dark"?"dark":themeId==="nft"?"dark":"dark"} C={C}/>
+                ):(
+                  <div style={{textAlign:"center",padding:"60px"}}>
+                    <div style={{fontSize:24,color:C.mint,opacity:.3,marginBottom:8}}>◻</div>
+                    <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Chart Station</div>
+                    <div style={{fontSize:12,color:C.tm}}>Enter any ticker above or click a quick symbol</div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -680,6 +744,86 @@ export default function App(){
                       </div>}
                     </div>
                   </div>
+
+                  {/* ═══ NEW POLYGON DATA PANELS ═══ */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginTop:10}}>
+
+                    {/* SHORT INTEREST */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>SHORT INTEREST</div>
+                      {aShorts&&(aShorts.short_volume||aShorts.short_interest)?(<>
+                        {aShorts.short_volume&&<>
+                          <div style={{fontFamily:M,fontSize:11,color:C.ts,marginBottom:4}}>Short Volume Ratio</div>
+                          <div style={{fontFamily:M,fontSize:20,fontWeight:700,color:(aShorts.short_volume.ratio||0)>40?C.warn:C.ts,marginBottom:6}}>{aShorts.short_volume.ratio||"—"}%</div>
+                          <div style={{height:4,background:C.bL,borderRadius:2,overflow:"hidden",marginBottom:4}}>
+                            <div style={{height:4,width:`${Math.min(aShorts.short_volume.ratio||0,100)}%`,background:(aShorts.short_volume.ratio||0)>50?C.red:(aShorts.short_volume.ratio||0)>40?C.warn:C.grn,borderRadius:2}}/>
+                          </div>
+                          <div style={{fontFamily:M,fontSize:9,color:C.tm}}>{aShorts.short_volume.date||""}</div>
+                        </>}
+                        {aShorts.short_interest&&<div style={{marginTop:6,paddingTop:6,borderTop:`1px solid ${C.bL}`}}>
+                          <div style={{fontFamily:M,fontSize:9,color:C.tm}}>Short Interest</div>
+                          <div style={{fontFamily:M,fontSize:11,fontWeight:600}}>{(aShorts.short_interest.short_interest||0).toLocaleString()}</div>
+                        </div>}
+                      </>):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No short data</div>}
+                    </div>
+
+                    {/* BENZINGA ANALYST RATINGS */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>ANALYST RATINGS</div>
+                      {aAnalysts&&aAnalysts.consensus?(<>
+                        <div style={{fontFamily:M,fontSize:14,fontWeight:700,color:aAnalysts.consensus.consensus==="Buy"||aAnalysts.consensus.consensus==="Outperform"?C.grn:aAnalysts.consensus.consensus==="Sell"?C.red:C.warn,marginBottom:6}}>{aAnalysts.consensus.consensus||"—"}</div>
+                        <div style={{display:"flex",gap:8,fontFamily:M,fontSize:10,marginBottom:6}}>
+                          <span style={{color:C.grn}}>{aAnalysts.consensus.buy||0} Buy</span>
+                          <span style={{color:C.warn}}>{aAnalysts.consensus.hold||0} Hold</span>
+                          <span style={{color:C.red}}>{aAnalysts.consensus.sell||0} Sell</span>
+                        </div>
+                        {aAnalysts.consensus.target_mean&&<div style={{fontFamily:M,fontSize:10,color:C.ts}}>Target ${aAnalysts.consensus.target_mean}</div>}
+                      </>):aAnalysts&&aAnalysts.ratings&&aAnalysts.ratings.length>0?(<>
+                        {aAnalysts.ratings.slice(0,4).map((r,i)=>(
+                          <div key={i} style={{padding:"3px 0",borderBottom:i<3?`1px solid ${C.bL}`:"none"}}>
+                            <div style={{display:"flex",justifyContent:"space-between"}}>
+                              <span style={{fontFamily:M,fontSize:10,color:C.ts}}>{r.firm||"Analyst"}</span>
+                              <span style={{fontFamily:M,fontSize:10,fontWeight:600,color:r.rating?.toLowerCase().includes("buy")?C.grn:r.rating?.toLowerCase().includes("sell")?C.red:C.warn}}>{r.rating||""}</span>
+                            </div>
+                            {r.target&&<div style={{fontFamily:M,fontSize:9,color:C.tm}}>PT ${r.target}</div>}
+                          </div>
+                        ))}
+                      </>):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No analyst data</div>}
+                    </div>
+
+                    {/* RELATED TICKERS */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>RELATED TICKERS</div>
+                      {aRelated&&aRelated.related&&aRelated.related.length>0?(
+                        <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                          {aRelated.related.slice(0,8).map((t,i)=>(
+                            <button key={i} onClick={()=>{setATk(t);doAnalyze(t)}} style={{padding:"4px 8px",borderRadius:4,border:`1px solid ${C.b}`,background:C.sf,color:C.ts,fontFamily:M,fontSize:10,cursor:"pointer"}}
+                              onMouseEnter={e=>e.currentTarget.style.borderColor=C.mint+"55"}
+                              onMouseLeave={e=>e.currentTarget.style.borderColor=C.b}>
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      ):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No related tickers</div>}
+                    </div>
+
+                    {/* TICKER NEWS */}
+                    <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px",maxHeight:200,overflow:"auto"}}>
+                      <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>LATEST NEWS</div>
+                      {aNews&&aNews.news&&aNews.news.length>0?(
+                        aNews.news.slice(0,5).map((n,i)=>(
+                          <div key={i} style={{padding:"4px 0",borderBottom:i<4?`1px solid ${C.bL}`:"none"}}>
+                            <div style={{fontFamily:S,fontSize:10,color:C.ts,lineHeight:1.4,marginBottom:2}}>{n.title}</div>
+                            <div style={{display:"flex",justifyContent:"space-between"}}>
+                              <span style={{fontFamily:M,fontSize:8,color:C.tm}}>{n.source}</span>
+                              <span style={{fontFamily:M,fontSize:8,color:C.tm}}>{(n.published||"").slice(0,10)}</span>
+                            </div>
+                          </div>
+                        ))
+                      ):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No ticker news</div>}
+                    </div>
+
+                  </div>
                 </>);
               })()}
             </div>
@@ -736,7 +880,7 @@ export default function App(){
             </div>
           )}
 
-          <div style={{marginTop:20,textAlign:"center",fontFamily:M,fontSize:8,color:C.tm,letterSpacing:2}}>ATLAS v7 · 14-RULE ENGINE · NOT FINANCIAL ADVICE</div>
+          <div style={{marginTop:20,textAlign:"center",fontFamily:M,fontSize:8,color:C.tm,letterSpacing:2}}>ATLAS v8 · POLYGON.IO · 14-RULE ENGINE · NOT FINANCIAL ADVICE</div>
         </div>
       </div>
     </div>
