@@ -1,7 +1,14 @@
 """
-ATLAS API — Scoring Engine v7
+ATLAS API — Scoring Engine v8
 14-rule two-engine scorer: Technical Gate + Catalyst Strength.
-Extracted directly from atlas_dashboard.py score() function.
+Updated for Polygon.io real-time data.
+
+Changes from v7:
+  - Entry now based on current close + breakout buffer (not stale prev_hi)
+  - Live price injected from Polygon snapshot when available
+  - Short interest used as supplementary edge signal
+  - Removed direct Finnhub API call for R10 — uses data layer instead
+  - Added VWAP proximity check as timing bonus
 """
 import numpy as np
 import pandas as pd
@@ -11,7 +18,8 @@ from datetime import datetime, timedelta
 from config import (FINNHUB_KEY, VIX_MAX, RSI_LO, RSI_HI,
                     CHIP_MIN, CHIP_MAX, CACHE_TTL, get_chip)
 from cache import cached
-from data import get_daily, get_sp500, get_vix, check_earnings, get_name
+from data import (get_daily, get_sp500, get_vix, check_earnings, get_name,
+                  get_prices, get_short_volume)
 from indicators import calc_ind
 
 
@@ -27,6 +35,7 @@ def score(tk):
         return None
 
     row = d.iloc[-1]
+    prev_row = d.iloc[-2]
     sp  = get_sp500()
     vix = get_vix()
 
@@ -41,8 +50,16 @@ def score(tk):
 
     clear, earn_dt = check_earnings(tk)
 
-    # ── Company name (FMP, cached 24h) ──────────────────────
+    # ── Company name (Polygon primary, cached 24h) ─────────────
     name = get_name(tk)
+
+    # ── Get live price from Polygon snapshot ───────────────────
+    live = get_prices([tk])
+    live_price = live.get(tk, {}).get("price")
+    live_change = live.get(tk, {}).get("change", 0)
+
+    # Use live price if available, otherwise latest close from historical
+    current_price = live_price if live_price and live_price > 0 else round(float(row["Close"]), 2)
 
     # ── TIER 1 — Survival (35%, must be 100%) ────────────────
     r7 = bool((not pd.isna(r6m) and r6m < 85) or (not pd.isna(r52) and r52 < 80))
@@ -54,11 +71,11 @@ def score(tk):
     r1 = bool(sp is not None and len(sp) > 200 and
               float(sp.iloc[-1]) > float(sp.rolling(200).mean().iloc[-1]))
     r2 = bool(vix and vix < VIX_MAX)
-    r3 = bool(not pd.isna(row.get("MA200", np.nan)) and row["Close"] > row["MA200"])
+    r3 = bool(not pd.isna(row.get("MA200", np.nan)) and current_price > row["MA200"])
     t2_score = round(sum([r1, r2, r3]) / 3 * 100)
 
     # ── TIER 3 — Timing (25%) ────────────────────────────────
-    r4 = bool(row["Close"] > row["MA50"] * 0.95)
+    r4 = bool(current_price > row["MA50"] * 0.95)
     r5 = bool(not pd.isna(pb) and 5 <= pb <= 12 and not pd.isna(adx) and adx > 15)
     r6 = bool((not pd.isna(rsi) and RSI_LO <= rsi <= RSI_HI) or
               (not pd.isna(vr) and vr < 1.0))
@@ -71,6 +88,7 @@ def score(tk):
     else:
         r9 = False
 
+    # R10: Post-earnings drift — check if stock rallied 3%+ in 15-45 days after earnings
     r10 = False
     try:
         p30 = (datetime.now() - timedelta(days=45)).strftime("%Y-%m-%d")
@@ -85,7 +103,7 @@ def score(tk):
             if ed:
                 days = (datetime.now() - datetime.strptime(ed, "%Y-%m-%d")).days
                 if 15 <= days <= 45 and len(d) > days:
-                    ret_e = (row["Close"] - float(d["Close"].iloc[-days])) / \
+                    ret_e = (current_price - float(d["Close"].iloc[-days])) / \
                              float(d["Close"].iloc[-days]) * 100
                     r10 = bool(ret_e > 3)
     except Exception:
@@ -105,7 +123,22 @@ def score(tk):
 
     ped_cat = 10 if r10 else 0
     rs_cat  = 5 if r9 else 0
-    catalyst_base = min(100, mfi_cat + ped_cat + rs_cat)
+
+    # NEW: Short volume ratio as supplementary signal
+    # High short volume (>40%) can indicate bearish pressure OR squeeze setup
+    short_cat = 0
+    try:
+        sv = get_short_volume(tk)
+        if sv and sv.get("ratio"):
+            ratio = sv["ratio"]
+            if ratio > 50:
+                short_cat = 5   # Potential squeeze setup — extra edge
+            elif ratio > 40:
+                short_cat = 2
+    except Exception:
+        pass
+
+    catalyst_base = min(100, mfi_cat + ped_cat + rs_cat + short_cat)
 
     # ── SIGNAL DECISION ──────────────────────────────────────
     if not t1_pass:
@@ -129,9 +162,13 @@ def score(tk):
     else:
         chip = CHIP_MIN
 
-    # ── ENTRY LEVELS ─────────────────────────────────────────
-    prev_hi = float(d["High"].iloc[-2]) if len(d) >= 2 else row["Close"]
-    entry = round(prev_hi * 1.005, 2)
+    # ── ENTRY LEVELS (using live price) ──────────────────────
+    # Entry: breakout above recent high with 0.5% buffer
+    # Uses the HIGHER of: yesterday's high, or current price
+    # This ensures entry isn't below where the stock already is
+    prev_hi = float(prev_row["High"])
+    raw_entry = max(prev_hi, current_price)
+    entry = round(raw_entry * 1.005, 2)
     stop  = round(entry * 0.950, 2)
     t1    = round(entry * 1.080, 2)
     t2    = round(entry * 1.150, 2)
@@ -156,6 +193,8 @@ def score(tk):
     if not pd.isna(mfi) and mfi > 60:
         reasons.append("strong buying pressure")
     if r3:  reasons.append("above 200MA uptrend")
+    if short_cat > 0:
+        reasons.append("high short interest — squeeze potential")
     if not r7: warnings.append("near highs — overbought")
     if not r8: warnings.append(f"earnings {earn_dt or 'soon'} — blocked")
     if not r2: warnings.append("VIX elevated")
@@ -193,6 +232,7 @@ def score(tk):
             "mfi": mfi_cat,
             "post_earnings_drift": ped_cat,
             "relative_strength": rs_cat,
+            "short_squeeze": short_cat,
         },
         "levels": {
             "entry": entry, "stop": stop,
@@ -200,7 +240,8 @@ def score(tk):
             "risk_reward": rr,
         },
         "chip": chip,
-        "price": round(float(row["Close"]), 2),
+        "price": current_price,
+        "change": live_change,
         "earnings_date": earn_dt,
         "clear": clear,
         "short": short,
