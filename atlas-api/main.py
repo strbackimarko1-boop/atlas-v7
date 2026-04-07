@@ -1,6 +1,7 @@
 """
-ATLAS API — FastAPI Application
+ATLAS API — FastAPI Application v8
 All endpoints for the ATLAS Signal Dashboard.
+Polygon.io is primary data source.
 
 Run: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 """
@@ -16,7 +17,12 @@ from cache import cache
 from data import (session_key, get_sp500, get_vix, get_fear_greed, get_crypto,
                   get_btc_dominance, get_fed_rate, get_10y_yield,
                   get_macro_news, get_upcoming_earnings, get_market_overview,
-                  get_prices, get_daily, get_name)
+                  get_prices, get_daily, get_name, get_ticker_details,
+                  get_market_status, get_market_holidays,
+                  get_short_interest, get_short_volume,
+                  get_analyst_consensus, get_analyst_ratings,
+                  get_financials, get_dividends, get_related_tickers,
+                  get_gainers, get_losers, get_splits, get_ticker_news)
 from gate import macro_gate
 from scoring import score, upgrade_signal
 from catalyst import get_catalyst, compute_full_catalyst
@@ -27,13 +33,13 @@ from analyze import analyze as analyze_ticker
 # ─── App Setup ────────────────────────────────────────────────
 app = FastAPI(
     title="ATLAS Signal API",
-    description="14-Rule Trading Signal Engine",
-    version="7.0",
+    description="14-Rule Trading Signal Engine — Powered by Polygon.io",
+    version="8.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Lock down in production to your domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,29 +53,49 @@ def now_et():
 
 
 def market_status():
+    """Market status — uses Polygon real-time status with manual fallback."""
+    poly_status = get_market_status()
     n = now_et()
-    is_open = (n.weekday() < 5 and
-               570 <= n.hour * 60 + n.minute < 960)
-    entry_window = (is_open and
-                    630 <= n.hour * 60 + n.minute < 930)
+
+    if poly_status and poly_status.get("market") != "unknown":
+        is_open = poly_status.get("is_open", False)
+        entry_window = is_open and (630 <= n.hour * 60 + n.minute < 930)
+        return {
+            "is_open": is_open,
+            "after_hours": poly_status.get("after_hours", False),
+            "early_hours": poly_status.get("early_hours", False),
+            "entry_window": entry_window,
+            "time_et": n.strftime("%H:%M:%S"),
+            "date": n.strftime("%b %d, %Y"),
+            "session": session_key(),
+            "source": "polygon",
+        }
+
+    # Fallback: manual calculation
+    is_open = (n.weekday() < 5 and 570 <= n.hour * 60 + n.minute < 960)
+    entry_window = (is_open and 630 <= n.hour * 60 + n.minute < 930)
     return {
         "is_open": is_open,
+        "after_hours": False,
+        "early_hours": False,
         "entry_window": entry_window,
         "time_et": n.strftime("%H:%M:%S"),
         "date": n.strftime("%b %d, %Y"),
         "session": session_key(),
+        "source": "manual",
     }
 
 
 # ═══════════════════════════════════════════════════════════════
-#  ENDPOINTS
+#  CORE ENDPOINTS (existing — unchanged logic)
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/")
 def root():
     return {
         "name": "ATLAS Signal API",
-        "version": "7.0",
+        "version": "8.0",
+        "engine": "Polygon.io Primary",
         "status": "running",
         "market": market_status(),
     }
@@ -137,7 +163,7 @@ def api_scan(mode: str):
         if sd["tech_score"] < 50 or not sd["tiers"]["survival_pass"]:
             continue
 
-        # Get live price
+        # Get live price from Polygon snapshot
         lp = prices.get(tk, {})
         if lp.get("price"):
             sd["price"] = lp["price"]
@@ -251,7 +277,7 @@ def api_catalyst(ticker: str):
 
 @app.get("/api/news")
 def api_news():
-    """Macro news with sentiment."""
+    """Macro news with sentiment — Benzinga via Polygon primary."""
     return {"news": get_macro_news()}
 
 
@@ -296,6 +322,121 @@ def api_analyze(ticker: str):
         raise HTTPException(status_code=404, detail=f"No data for {tk}")
     return data
 
+
+# ═══════════════════════════════════════════════════════════════
+#  NEW ENDPOINTS — Polygon-powered
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/api/market-status")
+def api_market_status():
+    """Real-time market status from Polygon."""
+    return {
+        "status": get_market_status(),
+        "holidays": get_market_holidays(),
+    }
+
+
+@app.get("/api/details/{ticker}")
+def api_details(ticker: str):
+    """Full company details from Polygon — name, sector, market cap, description, employees."""
+    tk = ticker.upper()
+    details = get_ticker_details(tk)
+    if not details or details.get("name") == tk:
+        raise HTTPException(status_code=404, detail=f"No details for {tk}")
+    return {"ticker": tk, "details": details}
+
+
+@app.get("/api/shorts/{ticker}")
+def api_shorts(ticker: str):
+    """Short interest + short volume for a ticker."""
+    tk = ticker.upper()
+    interest = get_short_interest(tk)
+    volume = get_short_volume(tk)
+    return {
+        "ticker": tk,
+        "short_interest": interest,
+        "short_volume": volume,
+    }
+
+
+@app.get("/api/analysts/{ticker}")
+def api_analysts(ticker: str):
+    """Analyst consensus + individual ratings from Benzinga via Polygon."""
+    tk = ticker.upper()
+    consensus = get_analyst_consensus(tk)
+    ratings = get_analyst_ratings(tk)
+    return {
+        "ticker": tk,
+        "consensus": consensus,
+        "ratings": ratings,
+    }
+
+
+@app.get("/api/financials/{ticker}")
+def api_financials(ticker: str):
+    """Quarterly financials from Polygon — revenue, net income, EPS, cash flow."""
+    tk = ticker.upper()
+    data = get_financials(tk)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"No financials for {tk}")
+    return {"ticker": tk, "quarters": data}
+
+
+@app.get("/api/dividends/{ticker}")
+def api_dividends(ticker: str):
+    """Dividend data from Polygon — history, frequency, yield estimate."""
+    tk = ticker.upper()
+    data = get_dividends(tk)
+    return {"ticker": tk, "dividends": data}
+
+
+@app.get("/api/related/{ticker}")
+def api_related(ticker: str):
+    """Related companies from Polygon."""
+    tk = ticker.upper()
+    related = get_related_tickers(tk)
+    return {"ticker": tk, "related": related}
+
+
+@app.get("/api/splits/{ticker}")
+def api_splits(ticker: str):
+    """Stock split history from Polygon."""
+    tk = ticker.upper()
+    data = get_splits(tk)
+    return {"ticker": tk, "splits": data}
+
+
+@app.get("/api/ticker-news/{ticker}")
+def api_ticker_news(ticker: str):
+    """News for a specific ticker from Polygon."""
+    tk = ticker.upper()
+    data = get_ticker_news(tk)
+    return {"ticker": tk, "news": data}
+
+
+@app.get("/api/movers")
+def api_movers():
+    """Top gainers and losers from Polygon snapshot."""
+    return {
+        "gainers": get_gainers(),
+        "losers": get_losers(),
+    }
+
+
+@app.get("/api/treasury")
+def api_treasury():
+    """Treasury yields from Polygon."""
+    t10 = get_10y_yield()
+    fed = get_fed_rate()
+    return {
+        "yield_10y": t10,
+        "fed_rate": fed,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  CACHE MANAGEMENT
+# ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/cache/stats")
 def api_cache_stats():
