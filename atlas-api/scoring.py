@@ -76,8 +76,8 @@ def score(tk):
     # TECHNICAL ENGINE — 4 Tiers
     # ═══════════════════════════════════════════════════════════
 
-    # ── TIER 1 — Survival (35%, must be 100%) ────────────────
-r7 = bool((not pd.isna(r6m) and r6m < 120) or (not pd.isna(r52) and r52 < 95))
+   # ── TIER 1 — Survival (35%, must be 100%) ────────────────
+    r7 = bool((not pd.isna(r6m) and r6m < 120) or (not pd.isna(r52) and r52 < 95))
     r8 = True
     t1_pass = r7 and r8
     t1_score = 100 if t1_pass else (50 if (r7 or r8) else 0)
