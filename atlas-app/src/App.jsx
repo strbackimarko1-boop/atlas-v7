@@ -33,8 +33,6 @@ const THEMES = {
 
 function getTheme(){try{return THEMES[window._atlasTheme]||THEMES.dark}catch(e){return THEMES.dark}}
 function setThemeId(id){try{window._atlasTheme=id}catch(e){}}
-
-// Initialize from memory
 try{window._atlasTheme=window._atlasTheme||"dark"}catch(e){}
 
 const M="'JetBrains Mono',monospace";
@@ -43,6 +41,23 @@ const fmt=v=>v>=1000?"$"+v.toLocaleString("en-US",{maximumFractionDigits:0}):"$"
 const pf=v=>(v>=0?"+":"")+v.toFixed(2)+"%";
 const dcc=(v,inv,C)=>inv?(v>0?C.red:C.grn):(v>=0?C.grn:C.red);
 const api=async p=>{try{const r=await fetch(p);return r.ok?await r.json():null}catch(e){return null}};
+
+// Period → days mapping for chart x-axis labels
+const PERIOD_DAYS={"1M":21,"3M":63,"6M":126,"1Y":252};
+
+// Convert sparkline array into date-labeled chart data
+function sparkToChartData(sparkline, period){
+  if(!Array.isArray(sparkline)||sparkline.length===0)return [];
+  const days = PERIOD_DAYS[period] || sparkline.length;
+  const today = new Date();
+  return sparkline.map((p, i) => {
+    const dayOffset = sparkline.length - 1 - i;
+    const d = new Date(today);
+    d.setDate(d.getDate() - dayOffset);
+    const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return { i, p: typeof p === "number" ? p : 0, date: label };
+  });
+}
 
 function Gauge({value,max=100,size=76,label,color,thick=5,C}){
   const r=(size-thick)/2,ci=Math.PI*r,p=Math.min(value/max,1),o=ci-p*ci;
@@ -72,7 +87,8 @@ function Spark({data,color,w=100,h=28}){
 function Tip({active,payload,label,C:c}){
   if(!active||!payload?.length)return null;
   const T=getTheme();
-  return<div style={{background:T.card,border:`1px solid ${T.b}`,borderRadius:6,padding:"6px 10px",fontFamily:M,fontSize:10}}><div style={{color:T.ts}}>{label}</div><div style={{color:T.mint,fontWeight:700}}>${payload[0].value?.toFixed(2)}</div></div>;
+  const p = payload[0].payload;
+  return<div style={{background:T.card,border:`1px solid ${T.b}`,borderRadius:6,padding:"6px 10px",fontFamily:M,fontSize:10}}><div style={{color:T.ts}}>{p?.date||label}</div><div style={{color:T.mint,fontWeight:700}}>${payload[0].value?.toFixed(2)}</div></div>;
 }
 
 function statusText(gate,C){
@@ -107,8 +123,32 @@ function newsTag(sentiment,C){
   return{label:"NEUTRAL",color:C.ts,bg:C.card};
 }
 
+// Catalyst chip row — small status pills for new Polygon catalysts
+function CatalystChips({components,consensus_block,C}){
+  if(!components)return null;
+  const chips=[];
+  const c=components;
+  if((c.analyst_actions||0)>=10)chips.push({label:"ANALYST UP",color:C.grn,bg:C.grnD});
+  if((c.analyst_actions||0)<=-10)chips.push({label:"ANALYST DOWN",color:C.red,bg:C.redD});
+  if((c.guidance||0)>=10)chips.push({label:"GUIDANCE +",color:C.grn,bg:C.grnD});
+  if((c.guidance||0)<=-10)chips.push({label:"GUIDANCE -",color:C.red,bg:C.redD});
+  if((c.consensus||0)>=10)chips.push({label:"WS BUY",color:C.grn,bg:C.grnD});
+  if(consensus_block)chips.push({label:"WS SELL",color:C.red,bg:C.redD});
+  if((c.short_interest||0)>0)chips.push({label:"SQUEEZE",color:C.warn,bg:C.warn+"15"});
+  if((c.short_interest||0)<=-10)chips.push({label:"SHORTED",color:C.red,bg:C.redD});
+  if((c.mfi||0)>=10)chips.push({label:"VOL FLOW",color:C.grn,bg:C.grnD});
+  if(chips.length===0)return null;
+  return(
+    <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
+      {chips.map((ch,i)=>(
+        <span key={i} style={{fontFamily:M,fontSize:8,fontWeight:600,letterSpacing:.5,color:ch.color,background:ch.bg,padding:"2px 7px",borderRadius:3,border:`1px solid ${ch.color}22`}}>{ch.label}</span>
+      ))}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════
-//  TradingView Embedded Chart Component
+//  TradingView Embedded Chart
 // ═══════════════════════════════════════════════════════════════
 function TVChart({symbol,theme="dark",C}){
   const containerId="tv_chart_"+symbol.replace(/[^a-zA-Z0-9]/g,"");
@@ -121,19 +161,10 @@ function TVChart({symbol,theme="dark",C}){
     script.type="text/javascript";
     script.async=true;
     script.innerHTML=JSON.stringify({
-      autosize:true,
-      symbol:symbol,
-      interval:"D",
-      timezone:"America/New_York",
-      theme:theme,
-      style:"1",
-      locale:"en",
-      allow_symbol_change:true,
-      calendar:false,
+      autosize:true,symbol:symbol,interval:"D",timezone:"America/New_York",theme:theme,
+      style:"1",locale:"en",allow_symbol_change:true,calendar:false,
       support_host:"https://www.tradingview.com",
-      hide_top_toolbar:false,
-      hide_legend:false,
-      save_image:false,
+      hide_top_toolbar:false,hide_legend:false,save_image:false,
       studies:["STD;SMA"],
       backgroundColor:theme==="dark"?"rgba(11,14,19,1)":"rgba(11,14,19,1)",
       gridColor:"rgba(30,37,48,0.3)",
@@ -148,14 +179,23 @@ export default function App(){
   const[themeId,setThemeIdState]=useState(()=>{try{return window._atlasTheme||"dark"}catch(e){return"dark"}});
   const C=THEMES[themeId]||THEMES.dark;
   const dc=(v,inv)=>dcc(v,inv,C);
-
   const switchTheme=(id)=>{setThemeIdState(id);setThemeId(id)};
+
+  // Responsive layout — detect narrow viewport
+  const[isNarrow,setIsNarrow]=useState(typeof window!=="undefined"?window.innerWidth<1100:false);
+  useEffect(()=>{
+    const onResize=()=>setIsNarrow(window.innerWidth<1100);
+    window.addEventListener("resize",onResize);
+    return()=>window.removeEventListener("resize",onResize);
+  },[]);
 
   const[page,setPage]=useState("radar");
   const[scan,setScan]=useState("STOCKS");
   const[sel,setSel]=useState(0);
   const[tab,setTab]=useState("plan");
   const[capital,setCapital]=useState(3500);
+  const[period,setPeriod]=useState("6M");
+  const[heroChart,setHeroChart]=useState(null);
   const[chartTk,setChartTk]=useState("");
   const[chartSym,setChartSym]=useState("");
   const[aTk,setATk]=useState("");
@@ -195,21 +235,12 @@ export default function App(){
     setALoading(true);setAData(null);setAShorts(null);setARelated(null);setANews(null);setAAnalysts(null);setAFinancials(null);setADividends(null);
     const tk=ticker.toUpperCase();
     const[d,sh,rel,nw,an,fin,dv]=await Promise.all([
-      api("/api/analyze/"+tk),
-      api("/api/shorts/"+tk),
-      api("/api/related/"+tk),
-      api("/api/ticker-news/"+tk),
-      api("/api/analysts/"+tk),
-      api("/api/financials/"+tk),
-      api("/api/dividends/"+tk),
+      api("/api/analyze/"+tk),api("/api/shorts/"+tk),api("/api/related/"+tk),
+      api("/api/ticker-news/"+tk),api("/api/analysts/"+tk),
+      api("/api/financials/"+tk),api("/api/dividends/"+tk),
     ]);
-    if(d)setAData(d);
-    if(sh)setAShorts(sh);
-    if(rel)setARelated(rel);
-    if(nw)setANews(nw);
-    if(an)setAAnalysts(an);
-    if(fin)setAFinancials(fin);
-    if(dv)setADividends(dv);
+    if(d)setAData(d);if(sh)setAShorts(sh);if(rel)setARelated(rel);if(nw)setANews(nw);
+    if(an)setAAnalysts(an);if(fin)setAFinancials(fin);if(dv)setADividends(dv);
     setALoading(false);
   },[]);
 
@@ -218,6 +249,18 @@ export default function App(){
 
   const sigs=scanData?.results||[];
   const hero=sigs[sel]||null;
+
+  // Fetch period-specific chart data when ticker or period changes
+  useEffect(()=>{
+    if(!hero?.ticker)return;
+    const periodMap={"1M":"1mo","3M":"3mo","6M":"6mo","1Y":"1y"};
+    const p=periodMap[period]||"6mo";
+    api(`/api/chart/${hero.ticker}?period=${p}`).then(d=>{
+      if(d&&d.closes)setHeroChart(d);
+      else setHeroChart(null);
+    });
+  },[hero?.ticker,period]);
+
   const mkt=gate?.market||{};
   const st=statusText(gate,C);
   const et=time.toLocaleString("en-US",{timeZone:"America/New_York",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
@@ -231,7 +274,15 @@ export default function App(){
   const p1=s1*((lv.t1||0)-entry),p2=s2*((lv.t2||0)-entry),p3=s3*((lv.t3||0)-entry);
   const tp=p1+p2+p3,rr=risk>0?tp/risk:0;
 
-  // Active nav style
+  // Build chart data — prefer dedicated chart endpoint, fall back to sparkline
+  const chartData = heroChart?.closes
+    ? heroChart.closes.map((p,i)=>{
+        const d = heroChart.dates && heroChart.dates[i] ? heroChart.dates[i] : null;
+        const label = d ? new Date(d).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+        return { i, p, date: label };
+      })
+    : sparkToChartData(hero?.sparkline || [], period);
+
   const navStyle=(id)=>({
     display:"flex",alignItems:"center",gap:10,width:"100%",marginBottom:2,
     padding:"9px 12px",borderRadius:6,border:"none",cursor:"pointer",
@@ -241,7 +292,6 @@ export default function App(){
     borderLeft:page===id?`2px solid ${C.mint}`:"2px solid transparent",
   });
 
-  // Accent button style
   const btnAccent={padding:"10px 20px",borderRadius:6,border:"none",background:C.mint,color:"#000",fontFamily:M,fontSize:11,fontWeight:700,cursor:"pointer"};
 
   return(
@@ -254,7 +304,7 @@ export default function App(){
         ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:${C.b};border-radius:3px}
       `}</style>
 
-      {/* ═══ SIDEBAR ═══ */}
+      {/* SIDEBAR */}
       <div style={{width:170,background:C.sb,borderRight:`1px solid ${C.b}`,display:"flex",flexDirection:"column",padding:"12px 0",flexShrink:0}}>
         <div style={{padding:"0 14px 14px",display:"flex",alignItems:"center",gap:8,borderBottom:`1px solid ${C.b}`}}>
           <div style={{width:24,height:24,background:C.mint,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#000",fontWeight:800}}>◈</div>
@@ -291,7 +341,7 @@ export default function App(){
         </div>
       </div>
 
-      {/* ═══ MAIN ═══ */}
+      {/* MAIN */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
 
         {/* STATUS BAR */}
@@ -301,7 +351,7 @@ export default function App(){
             <span style={{fontFamily:S,fontSize:12,fontWeight:600,color:st.color}}>{st.text}</span>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4}}>
-            {[{k:"sp_200ma",l:"S&P>200"},{k:"sp_50ma",l:"S&P>50"},{k:"vix_20",l:"VIX<20"},{k:"vix_25",l:"VIX<25"}].map((g,i)=>{
+            {[{k:"sp_200ma",l:"S&P>200"},{k:"sp_50ma",l:"S&P>50"},{k:"vix_20",l:"VIX OK"},{k:"vix_25",l:"VIX SAFE"}].map((g,i)=>{
               const v=gate?.checks?.[g.k];
               return<span key={i} style={{fontFamily:M,fontSize:9,padding:"2px 6px",borderRadius:3,background:v?C.grnD:C.redD,color:v?C.grn:C.red,fontWeight:500}}>{v?"✓":"✗"} {g.l}</span>;
             })}
@@ -309,38 +359,40 @@ export default function App(){
         </div>
 
         {/* MARKET STRIP */}
-        <div style={{background:C.sf,borderBottom:`1px solid ${C.b}`,padding:"0 20px",height:34,display:"flex",alignItems:"center",gap:16,flexShrink:0}}>
-          {pulse?.sp500?.price&&<span style={{fontFamily:M,fontSize:11}}>S&P <b style={{color:C.txt}}>{pulse.sp500.price.toLocaleString()}</b> <span style={{color:dc(pulse.sp500.change||0),fontSize:10}}>{pulse.sp500.change>0?"▲":"▼"}{Math.abs(pulse.sp500.change||0).toFixed(1)}%</span></span>}
+        <div style={{background:C.sf,borderBottom:`1px solid ${C.b}`,padding:"0 20px",height:34,display:"flex",alignItems:"center",gap:16,flexShrink:0,overflowX:"auto"}}>
+          {pulse?.sp500?.price&&<span style={{fontFamily:M,fontSize:11,whiteSpace:"nowrap"}}>S&P <b style={{color:C.txt}}>{pulse.sp500.price.toLocaleString()}</b> <span style={{color:dc(pulse.sp500.change||0),fontSize:10}}>{pulse.sp500.change>0?"▲":"▼"}{Math.abs(pulse.sp500.change||0).toFixed(1)}%</span></span>}
           <span style={{color:C.b}}>·</span>
-          {pulse?.vix?.value&&<span style={{fontFamily:M,fontSize:11}}>VIX <b style={{color:pulse.vix.value>25?C.red:C.txt}}>{pulse.vix.value}</b></span>}
+          {pulse?.vix?.value&&<span style={{fontFamily:M,fontSize:11,whiteSpace:"nowrap"}}>VIX <b style={{color:pulse.vix.value>45?C.red:C.txt}}>{pulse.vix.value}</b></span>}
           <span style={{color:C.b}}>·</span>
-          {pulse?.fear_greed?.score!=null&&<span style={{fontFamily:M,fontSize:11}}>Fear <b style={{color:pulse.fear_greed.score<25?C.red:C.txt}}>{pulse.fear_greed.score}</b> <span style={{fontSize:10,color:pulse.fear_greed.score<25?C.red:C.ts}}>{pulse.fear_greed.score<25?"Extreme":pulse.fear_greed.label||""}</span></span>}
+          {pulse?.fear_greed?.score!=null&&<span style={{fontFamily:M,fontSize:11,whiteSpace:"nowrap"}}>Fear <b style={{color:pulse.fear_greed.score<25?C.red:C.txt}}>{pulse.fear_greed.score}</b> <span style={{fontSize:10,color:pulse.fear_greed.score<25?C.red:C.ts}}>{pulse.fear_greed.score<25?"Extreme":pulse.fear_greed.label||""}</span></span>}
           <span style={{color:C.b}}>·</span>
-          {pulse?.btc_dominance&&<span style={{fontFamily:M,fontSize:11}}>BTC.D <b>{pulse.btc_dominance}%</b></span>}
+          {pulse?.btc_dominance&&<span style={{fontFamily:M,fontSize:11,whiteSpace:"nowrap"}}>BTC.D <b>{pulse.btc_dominance}%</b></span>}
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
             <div style={{display:"flex",alignItems:"center",gap:4}}>
               <div style={{width:5,height:5,borderRadius:"50%",background:mkt.is_open?C.grn:mkt.after_hours?"#F59E0B":C.tm,animation:mkt.is_open?"pulse 2s infinite":"none"}}/>
               <span style={{fontFamily:M,fontSize:10,color:mkt.is_open?C.grn:mkt.after_hours?"#F59E0B":C.tm}}>{mkt.is_open?"Open":mkt.after_hours?"After Hours":mkt.early_hours?"Pre-Market":"Closed"}</span>
             </div>
-            <span style={{fontFamily:M,fontSize:10,color:C.ts}}>{et} · {etd}</span>
+            <span style={{fontFamily:M,fontSize:10,color:C.ts,whiteSpace:"nowrap"}}>{et} · {etd}</span>
           </div>
         </div>
 
-        {/* ═══ CONTENT ═══ */}
+        {/* CONTENT */}
         <div style={{flex:1,overflow:"auto",padding:"10px 14px"}}>
 
-          {/* ═══ RADAR ═══ */}
+          {/* RADAR */}
           {page==="radar"&&(
             <div style={{animation:"fadeIn .2s ease"}}>
               {loading&&!hero?(
                 <div style={{textAlign:"center",padding:"60px"}}><div style={{fontSize:24,color:C.mint,opacity:.3,marginBottom:10}}>◈</div><div style={{fontFamily:M,fontSize:12,color:C.ts}}>Scanning {scan.toLowerCase()}...</div></div>
               ):hero?(
                 <>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 270px",gap:10,marginBottom:10}}>
+                  {/* Hero + Trade Panel — responsive grid */}
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 270px",gap:10,marginBottom:10}}>
+
                     {/* LEFT: CHART */}
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"12px 16px"}}>
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                           <span style={{fontFamily:M,fontSize:10,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>#{hero.rank||1}</span>
                           <div>
                             <span style={{fontSize:18,fontWeight:700}}>{hero.ticker}</span>
@@ -350,13 +402,13 @@ export default function App(){
                           {hero.clear&&<span style={{fontFamily:M,fontSize:9,color:C.grn,background:C.grnD,padding:"2px 7px",borderRadius:3}}>✓ No Earnings</span>}
                         </div>
                         <div style={{display:"flex",gap:2}}>
-                          {["1M","3M","6M","1Y"].map((p,i)=>(
-                            <button key={p} style={{padding:"3px 8px",borderRadius:4,border:`1px solid ${i===2?C.mint+"33":C.b}`,background:i===2?C.mint+"18":"transparent",color:i===2?C.mint:C.tm,fontFamily:M,fontSize:9,cursor:"pointer"}}>{p}</button>
+                          {["1M","3M","6M","1Y"].map((p)=>(
+                            <button key={p} onClick={()=>setPeriod(p)} style={{padding:"3px 10px",borderRadius:4,border:`1px solid ${period===p?C.mint+"55":C.b}`,background:period===p?C.mint+"18":"transparent",color:period===p?C.mint:C.tm,fontFamily:M,fontSize:9,cursor:"pointer",fontWeight:period===p?700:400}}>{p}</button>
                           ))}
                         </div>
                       </div>
 
-                      <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6}}>
+                      <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6,flexWrap:"wrap"}}>
                         <span style={{fontFamily:M,fontSize:22,fontWeight:700}}>{fmt(hero.price)}</span>
                         <span style={{fontFamily:M,fontSize:11,color:dc(hero.change||0)}}>{hero.change>0?"▲":"▼"} {Math.abs(hero.change||0).toFixed(2)}%</span>
                         <div style={{marginLeft:"auto",display:"flex",gap:12,fontFamily:M,fontSize:10,color:C.ts}}>
@@ -367,9 +419,9 @@ export default function App(){
                       </div>
 
                       <ResponsiveContainer width="100%" height={185}>
-                        <AreaChart data={(hero.sparkline||[]).map((p,i)=>({i,p}))}>
+                        <AreaChart data={chartData}>
                           <defs><linearGradient id="hg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.mint} stopOpacity={.12}/><stop offset="100%" stopColor={C.mint} stopOpacity={0}/></linearGradient></defs>
-                          <XAxis dataKey="i" tick={{fill:C.tm,fontSize:9,fontFamily:M}} axisLine={{stroke:C.bL}} tickLine={false} interval={9}/>
+                          <XAxis dataKey="date" tick={{fill:C.tm,fontSize:9,fontFamily:M}} axisLine={{stroke:C.bL}} tickLine={false} interval={Math.max(1,Math.floor(chartData.length/6))} minTickGap={20}/>
                           <YAxis tick={{fill:C.tm,fontSize:9,fontFamily:M}} axisLine={false} tickLine={false} width={44} domain={["auto","auto"]}/>
                           <Tooltip content={Tip}/>
                           <Area type="monotone" dataKey="p" stroke={C.mint} strokeWidth={1.5} fill="url(#hg)" dot={false}/>
@@ -377,19 +429,22 @@ export default function App(){
                       </ResponsiveContainer>
 
                       <ResponsiveContainer width="100%" height={20}>
-                        <BarChart data={(hero.sparkline||[]).map((p,i)=>({i,v:Math.random()*60+20}))}>
+                        <BarChart data={chartData.map((d,i)=>({i,v:Math.random()*60+20}))}>
                           <Bar dataKey="v" fill={C.mint+"15"} radius={[1,1,0,0]}/>
                         </BarChart>
                       </ResponsiveContainer>
 
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6,padding:"6px 10px",background:C.sf,borderRadius:5,border:`1px solid ${C.bL}`}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6,padding:"6px 10px",background:C.sf,borderRadius:5,border:`1px solid ${C.bL}`,flexWrap:"wrap"}}>
                         <span style={{fontFamily:M,fontSize:10,color:C.mint,fontWeight:600}}>WHY</span>
-                        <span style={{fontFamily:S,fontSize:11,color:C.ts,flex:1}}>{hero.reason||"Analyzing..."}</span>
+                        <span style={{fontFamily:S,fontSize:11,color:C.ts,flex:1,minWidth:200}}>{hero.reason||"Analyzing..."}</span>
                         <div style={{display:"flex",alignItems:"center",gap:3,background:C.mint+"18",padding:"2px 8px",borderRadius:3}}>
                           <span style={{color:C.grn,fontSize:9}}>↑</span>
                           <span style={{fontFamily:M,fontSize:11,fontWeight:700}}>${(hero.chip||0).toLocaleString()}</span>
                         </div>
                       </div>
+
+                      {/* Catalyst chip strip — visible flags from Polygon Benzinga */}
+                      <CatalystChips components={hero.catalyst_components} consensus_block={hero.consensus_block} C={C}/>
 
                       {sigs.length>1&&(
                         <div style={{display:"flex",gap:6,marginTop:8,overflowX:"auto",paddingBottom:2}}>
@@ -505,8 +560,8 @@ export default function App(){
                     </div>
                   </div>
 
-                  {/* BOTTOM GRID */}
-                  <div style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr 1.2fr",gap:8}}>
+                  {/* BOTTOM GRID — responsive */}
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr 1fr":"1.2fr 1fr 1fr 1.2fr",gap:8}}>
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:7,padding:"10px 12px",maxHeight:280,overflow:"auto"}}>
                       <div style={{fontSize:12,fontWeight:600,marginBottom:6}}>Other Setups</div>
                       {sigs.filter((_,i)=>i!==sel).slice(0,10).map((r,i)=>(
@@ -575,11 +630,11 @@ export default function App(){
             </div>
           )}
 
-          {/* ═══ CHARTS — TradingView Embedded ═══ */}
+          {/* CHARTS */}
           {page==="charts"&&(
             <div style={{animation:"fadeIn .2s"}}>
-              <div style={{display:"flex",gap:8,marginBottom:10}}>
-                <input value={chartTk} onChange={e=>setChartTk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter"&&chartTk)setChartSym(chartTk)}} placeholder="Enter ticker — NVDA, AAPL, BTCUSD, ETHUSD..." style={{flex:1,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+              <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                <input value={chartTk} onChange={e=>setChartTk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter"&&chartTk)setChartSym(chartTk)}} placeholder="Enter ticker — NVDA, AAPL, BTCUSD, ETHUSD..." style={{flex:1,minWidth:200,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
                 <button onClick={()=>{if(chartTk)setChartSym(chartTk)}} style={btnAccent}>→ Load Chart</button>
                 {["NVDA","AAPL","TSLA","BTCUSD","SPY"].map(t=>(
                   <button key={t} onClick={()=>{setChartTk(t);setChartSym(t)}} style={{padding:"8px 14px",borderRadius:6,border:`1px solid ${C.b}`,background:chartSym===t?C.mint+"18":C.card,color:chartSym===t?C.mint:C.ts,fontFamily:M,fontSize:10,cursor:"pointer"}}>{t}</button>
@@ -599,11 +654,11 @@ export default function App(){
             </div>
           )}
 
-          {/* ═══ ATLASSTONKS ═══ */}
+          {/* ATLASSTONKS */}
           {page==="outlook"&&(
             <div style={{animation:"fadeIn .2s"}}>
-              <div style={{display:"flex",gap:8,marginBottom:12}}>
-                <input value={aTk} onChange={e=>setATk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter")doAnalyze(aTk)}} placeholder="Type ticker — AAPL, NVDA, MSFT, BTC-USD..." style={{flex:1,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
+              <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                <input value={aTk} onChange={e=>setATk(e.target.value.toUpperCase())} onKeyDown={e=>{if(e.key==="Enter")doAnalyze(aTk)}} placeholder="Type ticker — AAPL, NVDA, MSFT, BTC-USD..." style={{flex:1,minWidth:200,maxWidth:400,padding:"10px 14px",borderRadius:6,background:C.card,border:`1px solid ${C.b}`,color:C.txt,fontFamily:M,fontSize:12,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.mint} onBlur={e=>e.target.style.borderColor=C.b}/>
                 <button onClick={()=>doAnalyze(aTk)} style={btnAccent}>→ Analyze</button>
               </div>
 
@@ -622,9 +677,9 @@ export default function App(){
                 const stColor=s=>s==="good"?C.grn:s==="warn"?C.warn:s==="bad"?C.red:C.ts;
 
                 return(<>
-                  <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"14px 18px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
                     <div>
-                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4,flexWrap:"wrap"}}>
                         <span style={{fontSize:20,fontWeight:700}}>{pr.name||d.ticker}</span>
                         <span style={{fontFamily:M,fontSize:11,color:C.ts}}>{d.ticker}</span>
                         <span style={{fontFamily:M,fontSize:9,color:C.tm,background:C.bL,padding:"2px 6px",borderRadius:3}}>{pr.exchange}</span>
@@ -639,7 +694,7 @@ export default function App(){
                     </div>
                   </div>
 
-                  <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr auto",gap:10,marginBottom:10}}>
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 16px"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,marginBottom:6}}>52-WEEK RANGE</div>
                       <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -659,7 +714,7 @@ export default function App(){
                     </div>
                   </div>
 
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr 1fr",gap:10,marginBottom:10}}>
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>FINANCIALS</div>
                       {sc.length>0?sc.map((s,i)=>(
@@ -708,7 +763,7 @@ export default function App(){
                     </div>
                   </div>
 
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr",gap:10}}>
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>VALUATION</div>
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
@@ -745,10 +800,8 @@ export default function App(){
                     </div>
                   </div>
 
-                  {/* ═══ NEW POLYGON DATA PANELS ═══ */}
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:10,marginTop:10}}>
-
-                    {/* SHORT INTEREST */}
+                  {/* POLYGON DATA PANELS */}
+                  <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr 1fr":"1fr 1fr 1fr 1fr",gap:10,marginTop:10}}>
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>SHORT INTEREST</div>
                       {aShorts&&(aShorts.short_volume||aShorts.short_interest)?(<>
@@ -767,12 +820,11 @@ export default function App(){
                       </>):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No short data</div>}
                     </div>
 
-                    {/* BENZINGA ANALYST RATINGS */}
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>ANALYST RATINGS</div>
                       {aAnalysts&&aAnalysts.consensus?(<>
                         <div style={{fontFamily:M,fontSize:14,fontWeight:700,color:aAnalysts.consensus.consensus==="Buy"||aAnalysts.consensus.consensus==="Outperform"?C.grn:aAnalysts.consensus.consensus==="Sell"?C.red:C.warn,marginBottom:6}}>{aAnalysts.consensus.consensus||"—"}</div>
-                        <div style={{display:"flex",gap:8,fontFamily:M,fontSize:10,marginBottom:6}}>
+                        <div style={{display:"flex",gap:8,fontFamily:M,fontSize:10,marginBottom:6,flexWrap:"wrap"}}>
                           <span style={{color:C.grn}}>{aAnalysts.consensus.buy||0} Buy</span>
                           <span style={{color:C.warn}}>{aAnalysts.consensus.hold||0} Hold</span>
                           <span style={{color:C.red}}>{aAnalysts.consensus.sell||0} Sell</span>
@@ -791,7 +843,6 @@ export default function App(){
                       </>):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No analyst data</div>}
                     </div>
 
-                    {/* RELATED TICKERS */}
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>RELATED TICKERS</div>
                       {aRelated&&aRelated.related&&aRelated.related.length>0?(
@@ -807,7 +858,6 @@ export default function App(){
                       ):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No related tickers</div>}
                     </div>
 
-                    {/* TICKER NEWS */}
                     <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"10px 14px",maxHeight:200,overflow:"auto"}}>
                       <div style={{fontFamily:M,fontSize:9,color:C.tm,letterSpacing:1,marginBottom:8}}>LATEST NEWS</div>
                       {aNews&&aNews.news&&aNews.news.length>0?(
@@ -822,14 +872,13 @@ export default function App(){
                         ))
                       ):<div style={{fontFamily:M,fontSize:10,color:C.tm}}>No ticker news</div>}
                     </div>
-
                   </div>
                 </>);
               })()}
             </div>
           )}
 
-          {/* ═══ GUIDE ═══ */}
+          {/* GUIDE */}
           {page==="guide"&&(
             <div style={{animation:"fadeIn .2s"}}>
               <div style={{background:C.card,border:`1px solid ${C.b}`,borderRadius:8,padding:"14px 18px",marginBottom:10}}>
@@ -849,11 +898,11 @@ export default function App(){
             </div>
           )}
 
-          {/* ═══ SETTINGS ═══ */}
+          {/* SETTINGS */}
           {page==="settings"&&(
             <div style={{animation:"fadeIn .2s"}}>
               <div style={{fontSize:15,fontWeight:700,marginBottom:14}}>Theme</div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+              <div style={{display:"grid",gridTemplateColumns:isNarrow?"1fr":"1fr 1fr 1fr",gap:12}}>
                 {Object.values(THEMES).map(t=>(
                   <div key={t.id} onClick={()=>switchTheme(t.id)} style={{
                     background:t.card,border:themeId===t.id?`2px solid ${t.mint}`:`2px solid ${t.b}`,
@@ -880,7 +929,7 @@ export default function App(){
             </div>
           )}
 
-          <div style={{marginTop:20,textAlign:"center",fontFamily:M,fontSize:8,color:C.tm,letterSpacing:2}}>ATLAS v8 · POLYGON.IO · 14-RULE ENGINE · NOT FINANCIAL ADVICE</div>
+          <div style={{marginTop:20,textAlign:"center",fontFamily:M,fontSize:8,color:C.tm,letterSpacing:2}}>ATLAS v9 · POLYGON.IO · 14-RULE ENGINE · NOT FINANCIAL ADVICE</div>
         </div>
       </div>
     </div>
