@@ -15,8 +15,8 @@ FMP_KEY     = os.getenv("FMP_KEY",     "eO61giAPPLknf1wXCKKokyHy6zPqykks")
 POLYGON_BASE = "https://api.polygon.io"
 
 # ─── Scoring Constants ────────────────────────────────────────
-VIX_OK       = 20
-VIX_MAX      = 25
+VIX_OK       = 35
+VIX_MAX      = 45
 RSI_LO       = 40
 RSI_HI       = 65
 EVENT_DAYS   = 5
