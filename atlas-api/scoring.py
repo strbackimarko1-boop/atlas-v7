@@ -75,11 +75,19 @@ def score(tk):
     # ═══════════════════════════════════════════════════════════
     # TECHNICAL ENGINE — 4 Tiers
     # ═══════════════════════════════════════════════════════════
-
-   # ── TIER 1 — Survival (35%, must be 100%) ────────────────
-    r7 = bool((not pd.isna(r6m) and r6m < 120) or (not pd.isna(r52) and r52 < 95))
-    r8 = True
-    t1_pass = r7 and r8
+# ── TIER 1 — Survival (35%, must be 100%) — Minervini-grade overbought block ──
+    ma50 = row.get("MA50", np.nan)
+    # R7: not overbought — must be within 25% of 52w high AND not >25% extended above MA50
+    r7_pos52 = bool(not pd.isna(r52) and r52 >= 75)
+    r7_extension = bool(pd.isna(ma50) or current_price <= float(ma50) * 1.25)
+    r7 = r7_pos52 and r7_extension
+    r8 = True  # earnings check temporarily forced True until check_earnings() rewrite
+    # R11: hard parabolic block — kills any signal regardless of other rules
+    r11_ret20 = bool(pd.isna(ret20) or ret20 < 50)
+    r11_rsi = bool(pd.isna(rsi) or rsi < 80)
+    r11_ext = bool(pd.isna(ma50) or current_price <= float(ma50) * 1.30)
+    r11 = r11_ret20 and r11_rsi and r11_ext
+    t1_pass = r7 and r8 and r11
     t1_score = 100 if t1_pass else (50 if (r7 or r8) else 0)
     # ── TIER 2 — Regime (25%) ────────────────────────────────
     r1 = bool(sp is not None and len(sp) > 200 and
@@ -87,12 +95,11 @@ def score(tk):
     r2 = bool(vix and vix < VIX_MAX)
     r3 = bool(not pd.isna(row.get("MA200", np.nan)) and current_price > row["MA200"])
     t2_score = round(sum([r1, r2, r3]) / 3 * 100)
-
     # ── TIER 3 — Timing (25%) ────────────────────────────────
     r4 = bool(current_price > row["MA50"] * 0.95)
-    r5 = bool(not pd.isna(pb) and 5 <= pb <= 12 and not pd.isna(adx) and adx > 15)
-    r6 = bool((not pd.isna(rsi) and RSI_LO <= rsi <= RSI_HI) or
-              (not pd.isna(vr) and vr < 1.0))
+    r5 = bool(not pd.isna(pb) and 2 <= pb <= 15 and not pd.isna(adx) and adx > 15)
+    r6 = bool(not pd.isna(rsi) and RSI_LO <= rsi <= RSI_HI)
+    t3_score = round(sum([r4, r5, r6]) / 3 * 100)
     t3_score = round(sum([r4, r5, r6]) / 3 * 100)
 
     # ── TIER 4 — Edge (15%) ──────────────────────────────────
