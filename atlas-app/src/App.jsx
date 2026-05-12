@@ -416,14 +416,10 @@ export default function App(){
                           <span>ADX <b style={{color:C.txt}}>{hero.indicators?.adx||"—"}</b></span>
                           <span>MFI <b style={{color:(hero.indicators?.mfi||0)>50?C.grn:C.txt}}>{hero.indicators?.mfi||"—"}</b></span>
                         </div>
-                      </div>
-<div style={{height:420,background:C.bg,borderRadius:6,overflow:"hidden",border:`1px solid ${C.bL}`,marginBottom:6}}>
+                     </div>
+                      <div style={{height:420,background:C.bg,borderRadius:6,overflow:"hidden",border:`1px solid ${C.bL}`,marginBottom:6}}>
                         <TVChart symbol={hero.ticker} theme="dark" C={C}/>
                       </div>
-                          <Bar dataKey="v" fill={C.mint+"15"} radius={[1,1,0,0]}/>
-                        </BarChart>
-                      </ResponsiveContainer>
-
                       <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6,padding:"6px 10px",background:C.sf,borderRadius:5,border:`1px solid ${C.bL}`,flexWrap:"wrap"}}>
                         <span style={{fontFamily:M,fontSize:10,color:C.mint,fontWeight:600}}>WHY</span>
                         <span style={{fontFamily:S,fontSize:11,color:C.ts,flex:1,minWidth:200}}>{hero.reason||"Analyzing..."}</span>
