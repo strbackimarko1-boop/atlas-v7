@@ -417,19 +417,9 @@ export default function App(){
                           <span>MFI <b style={{color:(hero.indicators?.mfi||0)>50?C.grn:C.txt}}>{hero.indicators?.mfi||"—"}</b></span>
                         </div>
                       </div>
-
-                      <ResponsiveContainer width="100%" height={185}>
-                        <AreaChart data={chartData}>
-                          <defs><linearGradient id="hg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.mint} stopOpacity={.12}/><stop offset="100%" stopColor={C.mint} stopOpacity={0}/></linearGradient></defs>
-                          <XAxis dataKey="date" tick={{fill:C.tm,fontSize:9,fontFamily:M}} axisLine={{stroke:C.bL}} tickLine={false} interval={Math.max(1,Math.floor(chartData.length/6))} minTickGap={20}/>
-                          <YAxis tick={{fill:C.tm,fontSize:9,fontFamily:M}} axisLine={false} tickLine={false} width={44} domain={["auto","auto"]}/>
-                          <Tooltip content={Tip}/>
-                          <Area type="monotone" dataKey="p" stroke={C.mint} strokeWidth={1.5} fill="url(#hg)" dot={false}/>
-                        </AreaChart>
-                      </ResponsiveContainer>
-
-                      <ResponsiveContainer width="100%" height={20}>
-                        <BarChart data={chartData.map((d,i)=>({i,v:Math.random()*60+20}))}>
+<div style={{height:420,background:C.bg,borderRadius:6,overflow:"hidden",border:`1px solid ${C.bL}`,marginBottom:6}}>
+                        <TVChart symbol={hero.ticker} theme="dark" C={C}/>
+                      </div>
                           <Bar dataKey="v" fill={C.mint+"15"} radius={[1,1,0,0]}/>
                         </BarChart>
                       </ResponsiveContainer>
