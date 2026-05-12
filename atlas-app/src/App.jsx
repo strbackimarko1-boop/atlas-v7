@@ -269,8 +269,7 @@ export default function App(){
   const entry=lv.entry||0,stop=lv.stop||0;
   const shares=entry>0?Math.floor(capital/entry):0;
   const inv=shares*entry,risk=shares*(entry-stop);
-  const s1=Math.floor(shares*.5),s2=Math.floor(shares*.3),s3=shares-s1-s2;
-  const p1=s1*((lv.t1||0)-entry),p2=s2*((lv.t2||0)-entry),p3=s3*((lv.t3||0)-entry);
+const s1=Math.max(1,Math.round(shares*.5)),s2=Math.max(0,Math.min(shares-s1,Math.round(shares*.3))),s3=Math.max(0,shares-s1-s2);  const p1=s1*((lv.t1||0)-entry),p2=s2*((lv.t2||0)-entry),p3=s3*((lv.t3||0)-entry);
   const tp=p1+p2+p3,rr=risk>0?tp/risk:0;
 
   // Build chart data — prefer dedicated chart endpoint, fall back to sparkline
