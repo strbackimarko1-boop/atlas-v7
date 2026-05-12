@@ -150,7 +150,7 @@ function CatalystChips({components,consensus_block,C}){
 // ═══════════════════════════════════════════════════════════════
 //  TradingView Embedded Chart
 // ═══════════════════════════════════════════════════════════════
-function TVChart({symbol,theme="dark",C}){
+const TVChart = React.memo(function TVChart({symbol,theme="dark",C}){
   const containerId="tv_chart_"+symbol.replace(/[^a-zA-Z0-9]/g,"");
   React.useEffect(()=>{
     const el=document.getElementById(containerId);
@@ -172,8 +172,7 @@ function TVChart({symbol,theme="dark",C}){
     el.appendChild(script);
   },[symbol,theme]);
   return<div id={containerId} style={{width:"100%",height:"100%"}}/>;
-}
-
+});
 // ═══════════════════════════════════════════════════════════════
 export default function App(){
   const[themeId,setThemeIdState]=useState(()=>{try{return window._atlasTheme||"dark"}catch(e){return"dark"}});
