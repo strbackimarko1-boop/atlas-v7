@@ -401,11 +401,7 @@ export default function App(){
                           <Pill sig={hero.signal} C={C}/>
                           {hero.clear&&<span style={{fontFamily:M,fontSize:9,color:C.grn,background:C.grnD,padding:"2px 7px",borderRadius:3}}>✓ No Earnings</span>}
                         </div>
-                        <div style={{display:"flex",gap:2}}>
-                          {["1M","3M","6M","1Y"].map((p)=>(
-                            <button key={p} onClick={()=>setPeriod(p)} style={{padding:"3px 10px",borderRadius:4,border:`1px solid ${period===p?C.mint+"55":C.b}`,background:period===p?C.mint+"18":"transparent",color:period===p?C.mint:C.tm,fontFamily:M,fontSize:9,cursor:"pointer",fontWeight:period===p?700:400}}>{p}</button>
-                          ))}
-                        </div>
+                        
                       </div>
 
                       <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:6,flexWrap:"wrap"}}>
