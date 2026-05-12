@@ -610,7 +610,7 @@ export default function App(){
                         return(
                           <div key={i} style={{padding:"5px 0",borderBottom:`1px solid ${C.bL}`}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-                              <span style={{fontFamily:S,fontSize:11,color:C.ts,flex:1,lineHeight:1.4}}>{n.text}</span>
+                              <span style={{fontFamily:S,fontSize:11,color:C.ts,flex:1,lineHeight:1.4}} dangerouslySetInnerHTML={{__html:n.text}}/>
                               <span style={{fontFamily:M,fontSize:8,color:tag.color,background:tag.bg,padding:"2px 6px",borderRadius:3,whiteSpace:"nowrap",flexShrink:0}}>{tag.label}</span>
                             </div>
                           </div>
